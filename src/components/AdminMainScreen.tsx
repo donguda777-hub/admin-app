@@ -34,6 +34,7 @@ import {
   resolveWorkerRatesForSlot,
   workerRateStorageKey,
   type AdminExtraAccountPersist,
+  type AdminExtraAccountRole,
   type AdminPersistV1,
   type PersonnelRowPersist,
   type TimesheetGridPersisted,
@@ -61,9 +62,17 @@ import {
 import { getSupabaseBrowserClient } from "../lib/supabaseClient";
 import {
   MASTER_ADMIN_ID,
-  isMasterAdminAccountId,
   normalizeAdminAccountId,
 } from "../auth/masterCredentials";
+import {
+  EXTRA_ADMIN_ROLE_LABELS,
+  canManageAdminAccounts,
+  canUnlockAmountRows,
+  canViewAmountRows,
+  normalizeExtraAdminRole,
+  resolveAdminRole,
+  type AdminRole,
+} from "../auth/adminRoles";
 import { verifyAdminLoginPassword } from "../auth/verifyAdminLoginPassword";
 
 type AdminMainScreenProps = {
@@ -416,15 +425,43 @@ function clampProjectContextMenuPosition(
   return { left, top };
 }
 
+function ExtraAdminRoleFieldset({
+  name,
+  value,
+  onChange,
+}: {
+  name: string;
+  value: AdminExtraAccountRole;
+  onChange: (role: AdminExtraAccountRole) => void;
+}) {
+  return (
+    <fieldset className="min-w-0 border-0 p-0">
+      <legend className="sr-only">{"\uAD8C\uD55C"}</legend>
+      <div className="flex flex-col gap-1.5">
+        {(["AMOUNT_ADMIN", "BASIC_ADMIN"] as const).map((role) => (
+          <label
+            key={role}
+            className="flex cursor-pointer items-center gap-1.5 text-[10px] text-slate-800 md:text-xs"
+          >
+            <input
+              type="radio"
+              name={name}
+              checked={value === role}
+              onChange={() => onChange(role)}
+              className="shrink-0"
+            />
+            <span className="leading-tight">{EXTRA_ADMIN_ROLE_LABELS[role]}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 export default function AdminMainScreen({
   onLogout,
   loggedInUserId,
 }: AdminMainScreenProps) {
-  const isMasterAdmin = useMemo(
-    () => isMasterAdminAccountId(loggedInUserId),
-    [loggedInUserId]
-  );
-
   const persistInitRef = useRef<AdminPersistV1 | null>(null);
   /** Supabase worker_day_entries 비동기 병합 세대(언마운트·의존 변경 시 stale 응답 무시) */
   const workerDayRemoteSyncGenRef = useRef(0);
@@ -541,11 +578,27 @@ export default function AdminMainScreen({
     AdminExtraAccountPersist[]
   >(() => readPersist().extraAdminAccounts ?? []);
 
+  const adminRole: AdminRole = useMemo(
+    () => resolveAdminRole(loggedInUserId, extraAdminAccounts),
+    [loggedInUserId, extraAdminAccounts]
+  );
+
+  const canManageAccounts = canManageAdminAccounts(adminRole);
+  const showAmountRows = canViewAmountRows(adminRole);
+  const showAmountUnlock = canUnlockAmountRows(adminRole);
+
+  const visibleFooterLabels = useMemo((): readonly string[] => {
+    if (showAmountRows) return FOOTER_LABELS;
+    return FOOTER_LABELS.filter((l) => l === FOOTER_EFFORT_LABEL);
+  }, [showAmountRows]);
+
   const [idHeaderMenuOpen, setIdHeaderMenuOpen] = useState(false);
   const [createAccountModalOpen, setCreateAccountModalOpen] = useState(false);
   const [createDraftId, setCreateDraftId] = useState("");
   const [createDraftPassword, setCreateDraftPassword] = useState("");
   const [createDraftUser, setCreateDraftUser] = useState("");
+  const [createDraftRole, setCreateDraftRole] =
+    useState<AdminExtraAccountRole>("AMOUNT_ADMIN");
 
   const [accountListRowMenu, setAccountListRowMenu] = useState<{
     index: number;
@@ -555,10 +608,16 @@ export default function AdminMainScreen({
   const [editingExtraAccountIndex, setEditingExtraAccountIndex] = useState<
     number | null
   >(null);
-  const [editExtraDraft, setEditExtraDraft] = useState({
+  const [editExtraDraft, setEditExtraDraft] = useState<{
+    id: string;
+    password: string;
+    user: string;
+    role: AdminExtraAccountRole;
+  }>({
     id: "",
     password: "",
     user: "",
+    role: "AMOUNT_ADMIN",
   });
   const [deleteExtraConfirmIndex, setDeleteExtraConfirmIndex] = useState<
     number | null
@@ -1131,7 +1190,8 @@ export default function AdminMainScreen({
         setAccountListRowMenu(null);
         setDeleteExtraConfirmIndex(null);
         setEditingExtraAccountIndex(null);
-        setEditExtraDraft({ id: "", password: "", user: "" });
+        setCreateDraftRole("AMOUNT_ADMIN");
+        setEditExtraDraft({ id: "", password: "", user: "", role: "AMOUNT_ADMIN" });
       }
     };
     window.addEventListener("keydown", onKey);
@@ -1482,7 +1542,7 @@ export default function AdminMainScreen({
     setCreateDraftUser("");
     setAccountListRowMenu(null);
     setEditingExtraAccountIndex(null);
-    setEditExtraDraft({ id: "", password: "", user: "" });
+    setEditExtraDraft({ id: "", password: "", user: "", role: "AMOUNT_ADMIN" });
     setDeleteExtraConfirmIndex(null);
     setPersonnelDeleteConfirm(null);
     setOpenYear(null);
@@ -1503,7 +1563,7 @@ export default function AdminMainScreen({
     setCreateDraftUser("");
     setAccountListRowMenu(null);
     setEditingExtraAccountIndex(null);
-    setEditExtraDraft({ id: "", password: "", user: "" });
+    setEditExtraDraft({ id: "", password: "", user: "", role: "AMOUNT_ADMIN" });
     setDeleteExtraConfirmIndex(null);
     setPersonnelDeleteConfirm(null);
   }, []);
@@ -1514,14 +1574,15 @@ export default function AdminMainScreen({
     setCreateDraftId("");
     setCreateDraftPassword("");
     setCreateDraftUser("");
+    setCreateDraftRole("AMOUNT_ADMIN");
     setAccountListRowMenu(null);
     setEditingExtraAccountIndex(null);
-    setEditExtraDraft({ id: "", password: "", user: "" });
+    setEditExtraDraft({ id: "", password: "", user: "", role: "AMOUNT_ADMIN" });
     setDeleteExtraConfirmIndex(null);
   }, []);
 
   const submitCreateAdminAccount = useCallback(() => {
-    if (!isMasterAdmin) return;
+    if (!canManageAccounts) return;
     const nid = createDraftId.trim();
     const npw = createDraftPassword.trim();
     const nuser = createDraftUser.trim();
@@ -1553,27 +1614,29 @@ export default function AdminMainScreen({
     }
     setExtraAdminAccounts((prev) => [
       ...prev,
-      { id: nid, password: npw, user: nuser },
+      { id: nid, password: npw, user: nuser, role: createDraftRole },
     ]);
     setCreateAccountModalOpen(false);
     setCreateDraftId("");
     setCreateDraftPassword("");
     setCreateDraftUser("");
+    setCreateDraftRole("AMOUNT_ADMIN");
   }, [
-    isMasterAdmin,
+    canManageAccounts,
     createDraftId,
     createDraftPassword,
     createDraftUser,
+    createDraftRole,
     extraAdminAccounts,
   ]);
 
   const cancelEditExtraAccount = useCallback(() => {
     setEditingExtraAccountIndex(null);
-    setEditExtraDraft({ id: "", password: "", user: "" });
+    setEditExtraDraft({ id: "", password: "", user: "", role: "AMOUNT_ADMIN" });
   }, []);
 
   const saveEditExtraAccount = useCallback(() => {
-    if (!isMasterAdmin) return;
+    if (!canManageAccounts) return;
     if (editingExtraAccountIndex == null) return;
     const ix = editingExtraAccountIndex;
     const nid = editExtraDraft.id.trim();
@@ -1614,12 +1677,17 @@ export default function AdminMainScreen({
       )
         return prev;
       const next = [...prev];
-      next[ix] = { id: nid, password: npw, user: nuser };
+      next[ix] = {
+        id: nid,
+        password: npw,
+        user: nuser,
+        role: editExtraDraft.role,
+      };
       return next;
     });
     cancelEditExtraAccount();
   }, [
-    isMasterAdmin,
+    canManageAccounts,
     editingExtraAccountIndex,
     editExtraDraft,
     extraAdminAccounts,
@@ -1628,7 +1696,7 @@ export default function AdminMainScreen({
 
   const openAccountListRowMenu = useCallback(
     (e: MouseEvent<HTMLButtonElement>, index: number) => {
-      if (!isMasterAdmin) return;
+      if (!canManageAccounts) return;
       e.stopPropagation();
       const rect = e.currentTarget.getBoundingClientRect();
       const menuW = 112;
@@ -1641,12 +1709,12 @@ export default function AdminMainScreen({
         prev?.index === index ? null : { index, left, top }
       );
     },
-    [isMasterAdmin]
+    [canManageAccounts]
   );
 
   const startEditExtraAccount = useCallback(
     (index: number) => {
-      if (!isMasterAdmin) return;
+      if (!canManageAccounts) return;
       const row = extraAdminAccounts[index];
       if (
         !row ||
@@ -1660,14 +1728,15 @@ export default function AdminMainScreen({
         id: row.id,
         password: row.password,
         user: row.user,
+        role: normalizeExtraAdminRole(row.role),
       });
     },
-    [isMasterAdmin, extraAdminAccounts]
+    [canManageAccounts, extraAdminAccounts]
   );
 
   const requestDeleteExtraAccount = useCallback(
     (index: number) => {
-      if (!isMasterAdmin) return;
+      if (!canManageAccounts) return;
       setAccountListRowMenu(null);
       const row = extraAdminAccounts[index];
       if (
@@ -1678,11 +1747,11 @@ export default function AdminMainScreen({
         return;
       setDeleteExtraConfirmIndex(index);
     },
-    [isMasterAdmin, extraAdminAccounts]
+    [canManageAccounts, extraAdminAccounts]
   );
 
   const confirmDeleteExtraAccount = useCallback(() => {
-    if (!isMasterAdmin) return;
+    if (!canManageAccounts) return;
     if (deleteExtraConfirmIndex == null) return;
     const delIx = deleteExtraConfirmIndex;
     setExtraAdminAccounts((prev) => {
@@ -1696,8 +1765,8 @@ export default function AdminMainScreen({
     });
     setDeleteExtraConfirmIndex(null);
     setEditingExtraAccountIndex(null);
-    setEditExtraDraft({ id: "", password: "", user: "" });
-  }, [isMasterAdmin, deleteExtraConfirmIndex]);
+    setEditExtraDraft({ id: "", password: "", user: "", role: "AMOUNT_ADMIN" });
+  }, [canManageAccounts, deleteExtraConfirmIndex]);
 
   const cancelDeleteExtraAccount = useCallback(() => {
     setDeleteExtraConfirmIndex(null);
@@ -1939,7 +2008,11 @@ export default function AdminMainScreen({
   }, [personnelMenuOpen]);
 
   useEffect(() => {
-    if (!isMasterAdmin) return;
+    if (!showAmountRows) setMoneyFooterUnmasked(false);
+  }, [showAmountRows]);
+
+  useEffect(() => {
+    if (!canManageAccounts) return;
     if (!idHeaderMenuOpen) return;
     const onPointerDownCapture = (e: PointerEvent) => {
       const t = e.target;
@@ -1951,13 +2024,13 @@ export default function AdminMainScreen({
     document.addEventListener("pointerdown", onPointerDownCapture, true);
     return () =>
       document.removeEventListener("pointerdown", onPointerDownCapture, true);
-  }, [isMasterAdmin, idHeaderMenuOpen]);
+  }, [canManageAccounts, idHeaderMenuOpen]);
 
   useEffect(() => {
-    if (isMasterAdmin) return;
+    if (canManageAccounts) return;
     setMainView((v) => (v === "accountList" ? "timesheet" : v));
     closeIdAdminUi();
-  }, [isMasterAdmin, closeIdAdminUi]);
+  }, [canManageAccounts, closeIdAdminUi]);
 
   useEffect(() => {
     setPersonnelCellMenu(null);
@@ -1971,7 +2044,8 @@ export default function AdminMainScreen({
     setCreateDraftUser("");
     setAccountListRowMenu(null);
     setEditingExtraAccountIndex(null);
-    setEditExtraDraft({ id: "", password: "", user: "" });
+    setCreateDraftRole("AMOUNT_ADMIN");
+    setEditExtraDraft({ id: "", password: "", user: "", role: "AMOUNT_ADMIN" });
     setDeleteExtraConfirmIndex(null);
     setPersonnelDeleteConfirm(null);
   }, [mainView, selectedPersonnelGrade]);
@@ -1990,7 +2064,7 @@ export default function AdminMainScreen({
   }, [personnelCellMenu]);
 
   useEffect(() => {
-    if (!isMasterAdmin) return;
+    if (!canManageAccounts) return;
     if (accountListRowMenu == null) return;
     const onPointerDownCapture = (e: PointerEvent) => {
       const t = e.target;
@@ -2001,7 +2075,7 @@ export default function AdminMainScreen({
     document.addEventListener("pointerdown", onPointerDownCapture, true);
     return () =>
       document.removeEventListener("pointerdown", onPointerDownCapture, true);
-  }, [isMasterAdmin, accountListRowMenu]);
+  }, [canManageAccounts, accountListRowMenu]);
 
   useEffect(() => {
     if (!personnelEditing) return;
@@ -2117,7 +2191,7 @@ export default function AdminMainScreen({
             </span>
           </h1>
           <div className="flex shrink-0 items-center justify-end gap-1.5 md:gap-2">
-            {isMasterAdmin ? (
+            {canManageAccounts ? (
               <div className="relative" data-id-header-slot="">
                 <button
                   type="button"
@@ -2145,6 +2219,7 @@ export default function AdminMainScreen({
                       setCreateDraftId("");
                       setCreateDraftPassword("");
                       setCreateDraftUser("");
+                      setCreateDraftRole("AMOUNT_ADMIN");
                       setCreateAccountModalOpen(true);
                       setIdHeaderMenuOpen(false);
                     }}
@@ -2586,7 +2661,7 @@ export default function AdminMainScreen({
                 );
               })()}
             </div>
-          ) : mainView === "accountList" && isMasterAdmin ? (
+          ) : mainView === "accountList" && canManageAccounts ? (
             <>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-0.5 md:px-1">
                 <h2 className="min-w-0 flex-1 text-center text-sm font-bold text-slate-800 md:text-base">
@@ -2604,16 +2679,19 @@ export default function AdminMainScreen({
                 <table className="w-full min-w-[44rem] table-fixed border-collapse border border-slate-400 text-[11px] md:text-sm">
                   <thead>
                     <tr className="bg-slate-200">
-                      <th className="w-[22%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                      <th className="w-[18%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
                         ID
                       </th>
-                      <th className="w-[22%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                      <th className="w-[18%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
                         PASSWORD
                       </th>
-                      <th className="w-[26%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                      <th className="w-[20%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
                         USER
                       </th>
-                      <th className="w-[14%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                      <th className="w-[22%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        {"\uAD8C\uD55C"}
+                      </th>
+                      <th className="w-[12%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
                         {"\uC218\uC815/\uC0AD\uC81C"}
                       </th>
                     </tr>
@@ -2622,7 +2700,7 @@ export default function AdminMainScreen({
                     {visibleExtraAdminRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={4}
+                          colSpan={5}
                           className="border border-slate-400 px-3 py-6 text-center text-slate-600"
                         >
                           {
@@ -2685,6 +2763,15 @@ export default function AdminMainScreen({
                                     className="box-border w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-[11px] outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-400/70 md:text-sm"
                                   />
                                 </td>
+                                <td className="border border-slate-400 px-1.5 py-1 align-middle">
+                                  <ExtraAdminRoleFieldset
+                                    name={`edit-extra-admin-role-${index}`}
+                                    value={editExtraDraft.role}
+                                    onChange={(role) =>
+                                      setEditExtraDraft((d) => ({ ...d, role }))
+                                    }
+                                  />
+                                </td>
                                 <td className="border border-slate-400 px-1 py-1 align-middle text-center">
                                   <div className="flex flex-wrap items-center justify-center gap-1">
                                     <button
@@ -2716,6 +2803,13 @@ export default function AdminMainScreen({
                                   {row.user.trim() === ""
                                     ? "\u00A0"
                                     : row.user}
+                                </td>
+                                <td className="border border-slate-400 px-2 py-1.5 text-center text-[10px] text-slate-800 md:text-xs">
+                                  {
+                                    EXTRA_ADMIN_ROLE_LABELS[
+                                      normalizeExtraAdminRole(row.role)
+                                    ]
+                                  }
                                 </td>
                                 <td className="border border-slate-400 px-1 py-1.5 text-center align-middle">
                                   <button
@@ -2938,7 +3032,7 @@ export default function AdminMainScreen({
                   ))}
                 </tbody>
                 <tfoot>
-                  {FOOTER_LABELS.map((label) => {
+                  {visibleFooterLabels.map((label) => {
                     if (label === FOOTER_SALARY_LABEL) {
                       return (
                         <ComputedMoneyFooterRow
@@ -2969,9 +3063,11 @@ export default function AdminMainScreen({
                           workerValues={workerLnTotals}
                           grandTotal={lnFooterGrandTotal}
                           masked={!moneyFooterUnmasked}
-                          labelButton={{
-                            onClick: openLnMoneyUnlockDialog,
-                          }}
+                          labelButton={
+                            showAmountUnlock
+                              ? { onClick: openLnMoneyUnlockDialog }
+                              : undefined
+                          }
                         />
                       );
                     }
@@ -3014,10 +3110,18 @@ export default function AdminMainScreen({
                 className="w-full table-fixed border-collapse text-[11px] leading-snug text-slate-800 md:text-[12px]"
               >
                 <colgroup>
-                  <col style={{ width: "44%" }} />
-                  <col style={{ width: "15%" }} />
-                  <col style={{ width: "15%" }} />
-                  <col style={{ width: "26%" }} />
+                  <col
+                    style={{ width: showAmountRows ? "44%" : "55%" }}
+                  />
+                  <col
+                    style={{ width: showAmountRows ? "15%" : "22.5%" }}
+                  />
+                  <col
+                    style={{ width: showAmountRows ? "15%" : "22.5%" }}
+                  />
+                  {showAmountRows ? (
+                    <col style={{ width: "26%" }} />
+                  ) : null}
                 </colgroup>
                 <thead>
                   <tr className="bg-slate-100">
@@ -3030,16 +3134,18 @@ export default function AdminMainScreen({
                     <th className="border border-slate-300 px-2 py-2 text-center text-[11px] font-bold text-slate-800 md:text-xs">
                       {"\uACF5\uC218"}
                     </th>
-                    <th className="border border-slate-300 px-2.5 py-2 text-right text-[11px] font-bold text-slate-800 md:text-xs">
-                      L&N
-                    </th>
+                    {showAmountRows ? (
+                      <th className="border border-slate-300 px-2.5 py-2 text-right text-[11px] font-bold text-slate-800 md:text-xs">
+                        L&N
+                      </th>
+                    ) : null}
                   </tr>
                 </thead>
                 <tbody>
                   {projects.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={4}
+                        colSpan={showAmountRows ? 4 : 3}
                         className="border border-slate-300 bg-white px-3 py-5 text-center text-xs text-slate-600 md:text-sm"
                       >
                         {
@@ -3064,11 +3170,13 @@ export default function AdminMainScreen({
                         <td className="border border-slate-300 px-2 py-1.5 text-center tabular-nums text-slate-700">
                           {formatSummaryEffortCell(row.effort)}
                         </td>
-                        <td className="border border-slate-300 px-2.5 py-1.5 text-right tabular-nums text-slate-700">
-                          {row.profitLn == null
-                            ? "-"
-                            : formatMoneyAmount(row.profitLn)}
-                        </td>
+                        {showAmountRows ? (
+                          <td className="border border-slate-300 px-2.5 py-1.5 text-right tabular-nums text-slate-700">
+                            {row.profitLn == null
+                              ? "-"
+                              : formatMoneyAmount(row.profitLn)}
+                          </td>
+                        ) : null}
                       </tr>
                     ))
                   )}
@@ -3087,9 +3195,11 @@ export default function AdminMainScreen({
                       <td className="border border-t-2 border-slate-300 border-t-slate-400 px-2 py-1.5 text-center tabular-nums">
                         {formatSummaryEffortCell(monthSummaryGrandTotals.effort)}
                       </td>
-                      <td className="border border-t-2 border-slate-300 border-t-slate-400 px-2.5 py-1.5 text-right tabular-nums">
-                        {formatMoneyAmount(monthSummaryGrandTotals.profitLn)}
-                      </td>
+                      {showAmountRows ? (
+                        <td className="border border-t-2 border-slate-300 border-t-slate-400 px-2.5 py-1.5 text-right tabular-nums">
+                          {formatMoneyAmount(monthSummaryGrandTotals.profitLn)}
+                        </td>
+                      ) : null}
                     </tr>
                   </tfoot>
                 ) : null}
@@ -3154,7 +3264,7 @@ export default function AdminMainScreen({
             document.body
           )
         : null}
-      {lnMoneyUnlockOpen
+      {showAmountUnlock && lnMoneyUnlockOpen
         ? createPortal(
             <div
               className="fixed inset-0 z-[416] flex items-center justify-center bg-black/35 p-4"
@@ -3455,7 +3565,7 @@ export default function AdminMainScreen({
             document.body
           )
         : null}
-      {isMasterAdmin && createAccountModalOpen
+      {canManageAccounts && createAccountModalOpen
         ? createPortal(
             <div
               className="fixed inset-0 z-[425] flex items-center justify-center bg-black/35 p-4"
@@ -3466,6 +3576,7 @@ export default function AdminMainScreen({
                   setCreateDraftId("");
                   setCreateDraftPassword("");
                   setCreateDraftUser("");
+                  setCreateDraftRole("AMOUNT_ADMIN");
                 }
               }}
             >
@@ -3519,6 +3630,18 @@ export default function AdminMainScreen({
                       className="mt-1 w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                     />
                   </label>
+                  <div>
+                    <p className="text-xs font-medium text-slate-700">
+                      {"\uAD8C\uD55C"}
+                    </p>
+                    <div className="mt-2">
+                      <ExtraAdminRoleFieldset
+                        name="create-extra-admin-role"
+                        value={createDraftRole}
+                        onChange={setCreateDraftRole}
+                      />
+                    </div>
+                  </div>
                 </div>
                 <div className="mt-4 flex justify-end gap-2">
                   <button
@@ -3528,6 +3651,7 @@ export default function AdminMainScreen({
                       setCreateDraftId("");
                       setCreateDraftPassword("");
                       setCreateDraftUser("");
+                      setCreateDraftRole("AMOUNT_ADMIN");
                     }}
                     className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50 md:text-sm"
                   >
@@ -3546,7 +3670,7 @@ export default function AdminMainScreen({
             document.body
           )
         : null}
-      {isMasterAdmin && accountListRowMenu != null
+      {canManageAccounts && accountListRowMenu != null
         ? createPortal(
             <div
               data-account-list-row-menu
@@ -3589,7 +3713,7 @@ export default function AdminMainScreen({
             document.body
           )
         : null}
-      {isMasterAdmin && deleteExtraConfirmIndex != null
+      {canManageAccounts && deleteExtraConfirmIndex != null
         ? createPortal(
             <div
               className="fixed inset-0 z-[430] flex items-center justify-center bg-black/35 p-4"

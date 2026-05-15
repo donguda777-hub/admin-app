@@ -97,11 +97,16 @@ export type PersonnelRowPersist = {
 /** 등급(한글 키)별 인적사항 행 */
 export type PersonnelByGradePersist = Record<string, PersonnelRowPersist[]>;
 
+/** 추가 관리자 권한(마스터 제외) */
+export type AdminExtraAccountRole = "AMOUNT_ADMIN" | "BASIC_ADMIN";
+
 /** 추가 관리자 계정(클라이언트 저장) */
 export type AdminExtraAccountPersist = {
   id: string;
   password: string;
   user: string;
+  /** 없으면 AMOUNT_ADMIN(기존 계정 호환) */
+  role?: AdminExtraAccountRole;
 };
 
 /** 작업자별 기준·차익 단가 (localStorage, worker_id 또는 이름 키) */
@@ -514,6 +519,11 @@ function asSummaryTotals(
   return out;
 }
 
+function parseExtraAdminRole(raw: unknown): AdminExtraAccountRole {
+  if (raw === "BASIC_ADMIN") return "BASIC_ADMIN";
+  return "AMOUNT_ADMIN";
+}
+
 function asExtraAdminAccounts(x: unknown): AdminExtraAccountPersist[] {
   if (!Array.isArray(x)) return [];
   const out: AdminExtraAccountPersist[] = [];
@@ -529,7 +539,12 @@ function asExtraAdminAccounts(x: unknown): AdminExtraAccountPersist[] {
     ) {
       continue;
     }
-    out.push({ id, password, user });
+    out.push({
+      id,
+      password,
+      user,
+      role: parseExtraAdminRole(item.role),
+    });
   }
   return out;
 }
