@@ -73,6 +73,8 @@ import {
   resolveAdminRole,
   type AdminRole,
 } from "../auth/adminRoles";
+import { verifyAdminLoginPassword } from "../auth/verifyAdminLoginPassword";
+
 type AdminMainScreenProps = {
   onLogout: () => void;
   loggedInUserId: string;
@@ -91,7 +93,7 @@ const FOOTER_LABELS = [
   "L&N",
 ] as const;
 
-/** ?ë‹¨ ?…ì²´ ê·¸ë£¹(ì´?30ì¹?. ?…ì²´ëª?ë°”ë¡œ ?„ë˜ ?‰ì? ?‘ì—…??ì¹??´ë¦„Â·ê¸°ì?Â·ì°¨ìµ ???ì—…) */
+/** ????? ??? ??(??30??. ????????? ????? ???? ???????????????????? ???????) */
 const COMPANY_GROUP_TONES = {
   ln: {
     header: "bg-[#f3ebe0] text-slate-800",
@@ -113,7 +115,7 @@ const COMPANY_GROUP_TONES = {
 
 type CompanyToneKey = keyof typeof COMPANY_GROUP_TONES;
 
-/** ?…ì²´ëª…Â·ìƒ‰ ??ê³ ì •, ì¹¸ìˆ˜???„ë¡œ?íŠ¸ë³?ê·¸ë¦¬??`companyWorkerSlotCounts`ë¡?ì¡°ì ˆ */
+/** ????????? ?????, ?????????????????????`companyWorkerSlotCounts`????? */
 const COMPANY_ROW_DEFS: ReadonlyArray<{
   name: string;
   tone: CompanyToneKey;
@@ -126,18 +128,18 @@ const COMPANY_ROW_DEFS: ReadonlyArray<{
 
 const WORKER_SLOT_COUNT = WORKER_COLUMN_COUNT;
 
-/** table-layout:fixed + colgroup: ?¼Â·ì‘?…ìÂ·?©ê³„ ê°€ë¡?ë¹„ìœ¨ (?©ê³„ë§?ì¡°ê¸ˆ ?“ê²Œ) */
+/** table-layout:fixed + colgroup: ???????????????? ????????? (????????? ????) */
 const COL_DAY_PCT = 2.5;
 const COL_SUM_PCT = 11;
 const COL_WORKER_PCT =
   (100 - COL_DAY_PCT - COL_SUM_PCT) / WORKER_SLOT_COUNT;
 
-/** ?‘ì—…?ë³„ ê¸ˆì•¡ ?í•œ (1??ë¯¸ë§Œ, ì²œë§Œ ?¨ìœ„ê¹Œì?) */
+/** ????????? ????? ????? (1?????, ???? ?????????) */
 function digitsOnly(s: string): string {
   return s.replace(/\D/g, "");
 }
 
-/** ?´ë???01x?? 10?ë¦¬ 3-3-4, 11?ë¦¬ 3-4-4; ê·??¸ëŠ” ìµœë? 11?ë¦¬ê¹Œì? 3-4-4 ?•íƒœ */
+/** ??????01x?? 10??? 3-3-4, 11??? 3-4-4; ??????? ???? 11??????? 3-4-4 ????? */
 function formatKoreanPhoneDisplay(digits: string): string {
   const d = digitsOnly(digits).slice(0, 15);
   if (d.length === 0) return "";
@@ -162,7 +164,7 @@ function formatMoneyAmount(value: number): string {
   }).format(Math.round(value));
 }
 
-/** ?¼ì ê³µìˆ˜ ?€ ë¬¸ì?????«ì (ë¹ˆì¹¸Â·ë¶ˆê? ??0) */
+/** ????? ???? ?? ????????????? (???????? ??0) */
 function parseEffortCellValue(raw: string): number {
   const t = raw.trim().replace(/,/g, ".").replace(/\s+/g, "");
   if (t === "") return 0;
@@ -171,7 +173,7 @@ function parseEffortCellValue(raw: string): number {
   return n;
 }
 
-/** ?˜ë‹¨ ê³µìˆ˜ ???œì‹œ: 0?´ë©´ ë¹?ë¬¸ì?? ?„ë‹ˆë©?ìµœë? ?Œìˆ˜ 4?ë¦¬ê¹Œì? ê¹”ë”??*/
+/** ????? ???? ???????: 0??? ???????? ??????????? ????? 4??????? ??????*/
 function formatEffortFooterTotal(total: number): string {
   if (!Number.isFinite(total) || Math.abs(total) < 1e-12) return "";
   const r = Math.round(total * 10000) / 10000;
@@ -180,13 +182,13 @@ function formatEffortFooterTotal(total: number): string {
   return r.toFixed(4).replace(/\.?0+$/, "");
 }
 
-/** ?˜ë‹¨ ê³µìˆ˜ ???¼ë²¨ (FOOTER_LABELS ì²???ª©) */
+/** ????? ???? ????? (FOOTER_LABELS ??????) */
 const FOOTER_EFFORT_LABEL = FOOTER_LABELS[0];
-/** ?˜ë‹¨ ê¸‰ì—¬ ???¼ë²¨ (ê³„ì‚° ?„ìš©, FOOTER_LABELS ?˜ì§¸) */
+/** ????? ????? ????? (????? ?????, FOOTER_LABELS ???) */
 const FOOTER_SALARY_LABEL = FOOTER_LABELS[1];
-/** ?˜ë‹¨ ?¤ê¸‰?????¼ë²¨ (ê³„ì‚° ?„ìš©) */
+/** ????? ??????????? (????? ?????) */
 const FOOTER_NET_PAY_LABEL = FOOTER_LABELS[2];
-/** ?˜ë‹¨ L&N ???¼ë²¨ (ê³„ì‚° ?„ìš©, ë¬¸ì??L&N) */
+/** ????? L&N ????? (????? ?????, ??????L&N) */
 const FOOTER_LN_ROW_LABEL = FOOTER_LABELS[3];
 
 const PERSONNEL_TABLE_FIELDS: ReadonlyArray<{
@@ -215,7 +217,7 @@ const PERSONNEL_TABLE_FIELDS: ReadonlyArray<{
 
 const MONEY_FOOTER_MASK = "*******";
 
-/** ê³„ì‚° ê¸ˆì•¡ ?€: ê°??†ìŒ ??`-`, ?ˆìœ¼ë©?ì²??¨ìœ„ ?¼í‘œ */
+/** ????? ????? ??: ?????? ??`-`, ?????????????? ????? */
 function formatFooterComputedMoney(value: number | null): string {
   if (value == null) return "-";
   return formatMoneyAmount(value);
@@ -244,7 +246,7 @@ function formatRateInputValue(v: number | null | undefined): string {
   return String(Math.trunc(v));
 }
 
-/** ê¸°ì?Â·ì°¨ìµ ?…ë ¥: ?«ìë§??ˆìš©, ë¹ˆê°’?€ null */
+/** ?????? ???: ????????????, ?????? null */
 function parseRateInputValue(raw: string): number | null {
   const digits = raw.replace(/\D/g, "");
   if (digits === "") return null;
@@ -330,7 +332,7 @@ function computeProjectTimesheetSummary(
   return { headcount, effort, profitLn };
 }
 
-/** ???„ì²´ ?”ì•½??ê³µìˆ˜ ?€: 0???«ìë¡??œì‹œ */
+/** ????? ??????????? ??: 0?????????????? */
 function formatSummaryEffortCell(total: number): string {
   if (!Number.isFinite(total) || Math.abs(total) < 1e-12) return "0";
   const t = formatEffortFooterTotal(total);
@@ -348,7 +350,7 @@ function ComputedMoneyFooterRow({
   workerValues: readonly (number | null)[];
   grandTotal: number | null;
   masked?: boolean;
-  /** L&N ?? ?¼ë²¨??? ê? ë²„íŠ¼?¼ë¡œ ?œì‹œ(ë§ˆìŠ¤???´ì œ/ë³µê?) */
+  /** L&N ?? ????????? ????????? ?????(???????????/???) */
   labelButton?: { text: string; onClick: () => void; ariaLabel?: string };
 }) {
   return (
@@ -461,7 +463,7 @@ export default function AdminMainScreen({
   loggedInUserId,
 }: AdminMainScreenProps) {
   const persistInitRef = useRef<AdminPersistV1 | null>(null);
-  /** Supabase worker_day_entries ë¹„ë™ê¸?ë³‘í•© ?¸ë?(?¸ë§ˆ?´íŠ¸Â·?˜ì¡´ ë³€ê²???stale ?‘ë‹µ ë¬´ì‹œ) */
+  /** Supabase worker_day_entries ??????????? ????(????????????? ??????stale ????? ????) */
   const workerDayRemoteSyncGenRef = useRef(0);
   const readPersist = (): AdminPersistV1 => {
     if (persistInitRef.current === null) {
@@ -471,27 +473,27 @@ export default function AdminMainScreen({
   };
 
   const [years, setYears] = useState(() => readPersist().years);
-  /** ê³µìˆ˜?œì— ë°˜ì˜???°Â·ì›”. ??ë¯¸ì„ ?ì´ë©?null */
+  /** ????????? ?????????????. ???????????null */
   const [timesheetYear, setTimesheetYear] = useState(
     () => readPersist().timesheetYear
   );
   const [timesheetMonth, setTimesheetMonth] = useState(
     () => readPersist().timesheetMonth
   );
-  /** ?¼ì¹œ ?°ë„???”ë§Œ ?œì‹œ. null?´ë©´ ???¨ê? */
+  /** ???? ?????????? ?????. null??? ?????? */
   const [openYear, setOpenYear] = useState(() => readPersist().openYear);
 
-  /** Supabase `projects` ?œì„± ëª©ë¡ (?°Â·ì›” ê³µí†µ) */
+  /** Supabase `projects` ????? ?? (?????? ????) */
   const [serverProjects, setServerProjects] = useState<ProjectTab[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     () => readPersist().selectedProjectId
   );
-  /** project: ê°œë³„ ê³µìˆ˜??/ summary: ?´ë‹¹ ???„ì²´ ?”ì•½ */
+  /** project: ???? ??????/ summary: ????? ????? ????? */
   const [sheetView, setSheetView] = useState<SheetView>(
     () => readPersist().sheetView
   );
 
-  /** ?°Â·ì›”Â·?„ë¡œ?íŠ¸ëª…ë³„ ê³µìˆ˜???ˆì´?„ì›ƒ(ì¹¸ìˆ˜Â·?‘ì—…?ëª…) + ì¡°íšŒ ê³µìˆ˜ ?œì‹œ */
+  /** ???????????????????? ??????????????(??????????????) + ???? ???? ????? */
   const [timesheetGrids, setTimesheetGrids] = useState<
     Record<string, TimesheetGridPersisted>
   >(() => {
@@ -526,7 +528,7 @@ export default function AdminMainScreen({
   const [workerRatesByKey, setWorkerRatesByKey] = useState<
     Record<string, WorkerRatePersist>
   >(() => readPersist().workerRatesByKey ?? {});
-  /** ?¨ê? ?ì—… ?€???´ê¸°Â·?€?????ë³„). ?…ë ¥ê°’ì? workerRateDraft?ë§Œ ?”ë‹¤. */
+  /** ???? ????? ??????????????????). ??????? workerRateDraft???? ?????. */
   const [workerRateDialogTarget, setWorkerRateDialogTarget] = useState<{
     workerIndex: number;
     workerName: string;
@@ -536,8 +538,14 @@ export default function AdminMainScreen({
     baseInput: "",
     spreadInput: "",
   });
-  /** ê¸‰ì—¬Â·?¤ê¸‰??·L&N ?˜ë‹¨ ??ë§ˆìŠ¤???¸ì…˜ë§? localStorage ?†ìŒ) */
+  /** ?????????????L&N ????? ???????????????? localStorage ????) */
   const [moneyFooterUnmasked, setMoneyFooterUnmasked] = useState(false);
+  const [lnMoneyUnlockOpen, setLnMoneyUnlockOpen] = useState(false);
+  const [lnMoneyUnlockPassword, setLnMoneyUnlockPassword] = useState("");
+  const [lnMoneyUnlockError, setLnMoneyUnlockError] = useState<string | null>(
+    null
+  );
+  const lnMoneyUnlockInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const workerRateBaseInputRef = useRef<HTMLInputElement>(null);
   const personnelEditInputRef = useRef<HTMLInputElement>(null);
@@ -632,7 +640,7 @@ export default function AdminMainScreen({
     grade: string;
     rowIndex: number;
   } | null>(null);
-  /** Supabase workers ???¸ì ?¬í•­ ?±ê¸‰ë³?ì¡°íšŒ ?œì„œ ? ì?) */
+  /** Supabase workers ?????????? ?????????? ????? ????) */
   const [workersByGradeFromSupabase, setWorkersByGradeFromSupabase] =
     useState<Record<string, WorkerRemoteRow[]> | null>(null);
   const workersPersonnelFetchGenRef = useRef(0);
@@ -922,7 +930,7 @@ export default function AdminMainScreen({
     });
   }, [timesheetYear, timesheetMonth]);
 
-  /** ? íƒ ?°Â·ì›”???„ë¡œ?íŠ¸ë³?ê³µìˆ˜?œì—??ê³„ì‚°(?„ì²´ ?”ì•½?œÂ·í•©ê³???. ê·¸ë¦¬?œÂ·ì´ë¦„Â·ê³µ?˜Â·L&N ë°˜ì˜ */
+  /** ????? ???????????????????????????????????(??? ???????????????. ?????????????L&N ????? */
   const projectMonthSummaryRows = useMemo(() => {
     if (
       timesheetYear == null ||
@@ -1322,9 +1330,40 @@ export default function AdminMainScreen({
     setWorkerRateDialogTarget(null);
   }, []);
 
-  const toggleMoneyFooterMask = useCallback(() => {
-    setMoneyFooterUnmasked((masked) => !masked);
+  const openLnMoneyUnlockDialog = useCallback(() => {
+    setLnMoneyUnlockPassword("");
+    setLnMoneyUnlockError(null);
+    setLnMoneyUnlockOpen(true);
   }, []);
+
+  const closeLnMoneyUnlockDialog = useCallback(() => {
+    setLnMoneyUnlockOpen(false);
+    setLnMoneyUnlockPassword("");
+    setLnMoneyUnlockError(null);
+  }, []);
+
+  const submitLnMoneyUnlock = useCallback(() => {
+    if (verifyAdminLoginPassword(loggedInUserId, lnMoneyUnlockPassword)) {
+      setMoneyFooterUnmasked(true);
+      closeLnMoneyUnlockDialog();
+      return;
+    }
+    setLnMoneyUnlockError(
+      "\uBE44\uBC00\uBC88\uD638\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
+    );
+  }, [
+    loggedInUserId,
+    lnMoneyUnlockPassword,
+    closeLnMoneyUnlockDialog,
+  ]);
+
+  const handleLnFooterLabelClick = useCallback(() => {
+    if (moneyFooterUnmasked) {
+      setMoneyFooterUnmasked(false);
+      return;
+    }
+    openLnMoneyUnlockDialog();
+  }, [moneyFooterUnmasked, openLnMoneyUnlockDialog]);
 
   const handleSaveWorkerRateDialog = useCallback(() => {
     if (workerRateDialogTarget == null) return;
@@ -1875,7 +1914,7 @@ export default function AdminMainScreen({
     [activeTimesheetGridKey]
   );
 
-  /** ?°ì¸¡ ?”ì‚´?? ?´ë‹¹ ?…ì²´ +1, ë°”ë¡œ ?¤ë¥¸ìª??…ì²´ -1 */
+  /** ??? ??????? ????? ??? +1, ???? ???????? -1 */
   const shiftSlotsFromRightNeighbor = useCallback(
     (groupIndex: number) => {
       updateActiveCompanyWorkerSlotCounts((prev) => {
@@ -1890,7 +1929,7 @@ export default function AdminMainScreen({
     [updateActiveCompanyWorkerSlotCounts]
   );
 
-  /** ì¢Œì¸¡ ?”ì‚´?? ?´ë‹¹ ?…ì²´ -1, ë°”ë¡œ ?¤ë¥¸ìª??…ì²´ +1 */
+  /** ??? ??????? ????? ??? -1, ???? ???????? +1 */
   const shiftSlotsToRightNeighbor = useCallback(
     (groupIndex: number) => {
       updateActiveCompanyWorkerSlotCounts((prev) => {
@@ -1929,7 +1968,7 @@ export default function AdminMainScreen({
       try {
         localStorage.setItem(ADMIN_STORAGE_KEY, JSON.stringify(snapshot));
       } catch {
-        /* ?€??ê³µê°„ ë¶€ì¡???*/
+        /* ??????? ??????*/
       }
     }, 400);
     return () => window.clearTimeout(id);
@@ -1953,6 +1992,14 @@ export default function AdminMainScreen({
     }, 0);
     return () => window.clearTimeout(t);
   }, [workerRateDialogTarget]);
+
+  useEffect(() => {
+    if (!lnMoneyUnlockOpen) return;
+    const t = window.setTimeout(() => {
+      lnMoneyUnlockInputRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [lnMoneyUnlockOpen]);
 
   useEffect(() => {
     if (!personnelMenuOpen) return;
@@ -2250,7 +2297,7 @@ export default function AdminMainScreen({
 
       {mainView === "timesheet" ? (
         <>
-          {/* ???? ì¢Œì¸¡ ?•ë ¬, ?œë¡­?¤ìš´?€ ?¤í¬ë¡?ë°?overflow ë¯¸í´ë¦? */}
+          {/* ???? ??? ???, ?????????? ???????overflow ???? */}
           <div className="shrink-0 w-full min-w-0 overflow-x-visible overflow-y-visible border-b border-slate-200 bg-white py-2.5 pl-1 pr-1 md:pl-2 md:pr-2">
         <div className="flex w-max max-w-none flex-nowrap items-center gap-2">
           <span className="shrink-0 rounded border border-slate-300 bg-slate-100 px-2 py-1.5 text-xs font-bold text-slate-800 md:text-sm">
@@ -2330,7 +2377,7 @@ export default function AdminMainScreen({
         </div>
       </div>
 
-      {/* ?„ë¡œ?íŠ¸: ì¢Œì¸¡ ?¤í¬ë¡?+ ?°ì¸¡ ê³ ì • ?„ì²´ */}
+      {/* ?????????: ??? ?????+ ??? ??? ??? */}
       <div className="flex w-full min-w-0 items-stretch border-b border-slate-200 bg-white">
         <div className="min-w-0 flex-1 overflow-x-auto py-2 pl-1 md:py-2.5 md:pl-2">
           <div className="flex w-max flex-nowrap items-center gap-2">
@@ -3030,7 +3077,7 @@ export default function AdminMainScreen({
                                   text: moneyFooterUnmasked
                                     ? "\uC7A0\uAE08"
                                     : FOOTER_LN_ROW_LABEL,
-                                  onClick: toggleMoneyFooterMask,
+                                  onClick: handleLnFooterLabelClick,
                                   ariaLabel: moneyFooterUnmasked
                                     ? "\uAE08\uC561 \uC228\uAE30"
                                     : "\uAE08\uC561 \uBCF4\uAE30",
@@ -3229,6 +3276,80 @@ export default function AdminMainScreen({
               >
                 {"\uC218\uC815"}
               </button>
+            </div>,
+            document.body
+          )
+        : null}
+      {showAmountUnlock && lnMoneyUnlockOpen
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[416] flex items-center justify-center bg-black/35 p-4"
+              role="presentation"
+              onPointerDown={(e) => {
+                if (e.target === e.currentTarget) closeLnMoneyUnlockDialog();
+              }}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="ln-money-unlock-title"
+                className="w-full max-w-sm rounded-lg border border-slate-300 bg-white p-4 shadow-xl"
+                onPointerDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") closeLnMoneyUnlockDialog();
+                }}
+              >
+                <h3
+                  id="ln-money-unlock-title"
+                  className="text-sm font-bold text-slate-900"
+                >
+                  {"L&N \uAE08\uC561 \uBCF4\uAE30"}
+                </h3>
+                <label className="mt-3 block text-xs font-medium text-slate-700">
+                  {"\uBE44\uBC00\uBC88\uD638"}
+                  <input
+                    ref={lnMoneyUnlockInputRef}
+                    type="password"
+                    autoComplete="current-password"
+                    value={lnMoneyUnlockPassword}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                      setLnMoneyUnlockPassword(e.target.value);
+                      if (lnMoneyUnlockError != null) {
+                        setLnMoneyUnlockError(null);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        submitLnMoneyUnlock();
+                      }
+                    }}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    aria-label={"\uBE44\uBC00\uBC88\uD638"}
+                  />
+                </label>
+                {lnMoneyUnlockError != null ? (
+                  <p className="mt-2 text-xs text-red-600" role="alert">
+                    {lnMoneyUnlockError}
+                  </p>
+                ) : null}
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeLnMoneyUnlockDialog}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50 md:text-sm"
+                  >
+                    {"\uCDE8\uC18C"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitLnMoneyUnlock}
+                    className="rounded-md border border-teal-600 bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 md:text-sm"
+                  >
+                    {"\uC5F4\uAE30"}
+                  </button>
+                </div>
+              </div>
             </div>,
             document.body
           )
