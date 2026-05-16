@@ -607,6 +607,7 @@ export default function AdminMainScreen({
     workerName: string;
     workerId: string;
     projectId: string | null;
+    projectName: string;
   } | null>(null);
   const [workerRateDialogFetchBusy, setWorkerRateDialogFetchBusy] =
     useState(false);
@@ -997,7 +998,11 @@ export default function AdminMainScreen({
         setProjectWorkerRatesByKey((prev) => {
           if (workerDayRemoteSyncGenRef.current !== genAtStart) return prev;
           const stripped = stripProjectWorkerRateKeysForProject(prev, pid);
-          const chunk = ingestProjectWorkerRatesFromRows(pid, rows);
+          const chunk = ingestProjectWorkerRatesFromRows(
+            pid,
+            projectNameTrimmed,
+            rows
+          );
           return { ...stripped, ...chunk };
         });
         if (workerDayRemoteSyncGenRef.current === genAtStart && source === "deps") {
@@ -1634,12 +1639,14 @@ export default function AdminMainScreen({
         activeTimesheetGrid.body[timesheetWorkerIdCellKey(workerIndex)] ?? ""
       ).trim();
       const projectId = activeProject?.id ?? null;
+      const projectName = (activeProject?.name ?? "").trim();
       const seq = ++workerRateDialogSeqRef.current;
       setWorkerRateDialogTarget({
         workerIndex,
         workerName: name,
         workerId,
         projectId,
+        projectName,
       });
       setWorkerRateDialogFetchBusy(true);
       setWorkerRateDraft({ baseInput: "", spreadInput: "" });
@@ -1648,15 +1655,16 @@ export default function AdminMainScreen({
         let serverBase: number | null = null;
         let serverSpread: number | null = null;
         if (
-          projectId != null &&
-          projectId.trim() !== "" &&
-          workerId !== "" &&
+          projectName !== "" &&
+          (workerId !== "" || name !== "") &&
           timesheetYear != null &&
           timesheetMonth != null
         ) {
           const r = await fetchWorkerProjectRatesForMonth({
-            projectId,
+            projectId: projectId ?? "",
+            projectName,
             workerId,
+            workerName: name,
             year: timesheetYear,
             month1Based: timesheetMonth,
           });
@@ -1739,12 +1747,12 @@ export default function AdminMainScreen({
     if (workerRateDialogTarget == null || workerRateSaveBusy) return;
     const base = parseRateInputValue(workerRateDraft.baseInput);
     const spread = parseRateInputValue(workerRateDraft.spreadInput);
-    const { workerId, workerName, projectId } = workerRateDialogTarget;
+    const { workerId, workerName, projectId, projectName } =
+      workerRateDialogTarget;
 
     const canServer =
-      projectId != null &&
-      projectId.trim() !== "" &&
-      workerId.trim() !== "" &&
+      projectName.trim() !== "" &&
+      (workerId.trim() !== "" || workerName.trim() !== "") &&
       timesheetYear != null &&
       timesheetMonth != null &&
       getSupabaseBrowserClient() != null;
@@ -1753,8 +1761,10 @@ export default function AdminMainScreen({
       setWorkerRateSaveBusy(true);
       try {
         const res = await updateWorkerProjectRatesForMonth({
-          projectId: projectId!,
+          projectId: projectId ?? "",
+          projectName: projectName.trim(),
           workerId: workerId.trim(),
+          workerName: workerName.trim(),
           year: timesheetYear!,
           month1Based: timesheetMonth!,
           base,
@@ -1779,7 +1789,10 @@ export default function AdminMainScreen({
           setWorkerRateDialogTarget(null);
           return;
         }
-        const rateKey = projectWorkerRateStorageKey(projectId!, workerId.trim());
+        const rateKey = projectWorkerRateStorageKey(
+          (projectId ?? "").trim() || `name:${projectName.trim()}`,
+          workerId.trim() || workerName.trim()
+        );
         setProjectWorkerRatesByKey((prev) => ({
           ...prev,
           [rateKey]: { base, spread },
