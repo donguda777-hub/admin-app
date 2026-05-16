@@ -61,11 +61,10 @@ import {
   renameProjectNameWithWorkerEntriesInSupabase,
 } from "../lib/projectsFromSupabase";
 import { deleteWorkerDayEntriesForMonthProjectAndCompanyGroup } from "../lib/deleteWorkerDayEntriesFromSupabase";
-import { fetchWorkerDayEntriesForMonth } from "../lib/fetchWorkerDayEntriesForMonth";
 import {
-  buildFlatWorkersByWorkerId,
-  computeMonthlyPayrollRowsFromServerEntries,
-} from "../lib/monthlyPayrollAggregate";
+  loadMonthlyPayrollData,
+  type MonthlyPayrollRow,
+} from "../lib/loadMonthlyPayrollData";
 import {
   TIMESHEET_COMPANY_GROUP_NAMES,
   companyWorkerSlotRanges,
@@ -676,10 +675,10 @@ export default function AdminMainScreen({
     } | null>(null);
   const [timesheetWorkerDeleteBusy, setTimesheetWorkerDeleteBusy] =
     useState(false);
-  /** 월급여: Supabase `worker_day_entries` 월간 전체 조회 결과 (`null` = 아직 로드 전/다른 화면) */
-  const [payrollRemoteEntries, setPayrollRemoteEntries] = useState<
-    WorkerDayEntryRemoteRow[] | null
-  >(null);
+  /** 월급여: `loadMonthlyPayrollData`만으로 채움(공수표 그리드·workers 전역 fetch와 무관) */
+  const [monthlyPayrollRows, setMonthlyPayrollRows] = useState<
+    MonthlyPayrollRow[]
+  >([]);
   const [payrollRemoteFetchBusy, setPayrollRemoteFetchBusy] = useState(false);
   const [payrollRemoteFetchError, setPayrollRemoteFetchError] = useState<
     string | null
@@ -1274,7 +1273,7 @@ export default function AdminMainScreen({
       timesheetYear == null ||
       timesheetMonth == null
     ) {
-      setPayrollRemoteEntries(null);
+      setMonthlyPayrollRows([]);
       setPayrollRemoteFetchBusy(false);
       setPayrollRemoteFetchError(null);
       return;
@@ -1282,40 +1281,30 @@ export default function AdminMainScreen({
     let cancelled = false;
     setPayrollRemoteFetchBusy(true);
     setPayrollRemoteFetchError(null);
-    setPayrollRemoteEntries(null);
-    void fetchWorkerDayEntriesForMonth(timesheetYear, timesheetMonth).then(
-      ({ rows, error }) => {
-        if (cancelled) return;
-        setPayrollRemoteFetchBusy(false);
-        if (error != null) {
-          console.error("[Supabase] payroll worker_day_entries fetch failed", {
-            message: error,
-            year: timesheetYear,
-            month: timesheetMonth,
-          });
-          setPayrollRemoteFetchError(error);
-          setPayrollRemoteEntries([]);
-          return;
-        }
-        setPayrollRemoteEntries(rows);
+    setMonthlyPayrollRows([]);
+    void loadMonthlyPayrollData(
+      timesheetYear,
+      timesheetMonth,
+      workerRatesByKey
+    ).then(({ rows, error }) => {
+      if (cancelled) return;
+      setPayrollRemoteFetchBusy(false);
+      if (error != null) {
+        console.error("[Supabase] payroll loadMonthlyPayrollData failed", {
+          message: error,
+          year: timesheetYear,
+          month: timesheetMonth,
+        });
+        setPayrollRemoteFetchError(error);
+        setMonthlyPayrollRows([]);
+        return;
       }
-    );
+      setMonthlyPayrollRows(rows);
+    });
     return () => {
       cancelled = true;
     };
-  }, [mainView, timesheetYear, timesheetMonth]);
-
-  const monthlyPayrollRows = useMemo(() => {
-    if (payrollRemoteEntries == null) return [];
-    const workersByWorkerId = buildFlatWorkersByWorkerId(
-      workersByGradeFromSupabase
-    );
-    return computeMonthlyPayrollRowsFromServerEntries(
-      payrollRemoteEntries,
-      workerRatesByKey,
-      workersByWorkerId
-    );
-  }, [payrollRemoteEntries, workerRatesByKey, workersByGradeFromSupabase]);
+  }, [mainView, timesheetYear, timesheetMonth, workerRatesByKey]);
 
   const onYearClick = useCallback((y: number) => {
     setOpenYear((prev) => {
