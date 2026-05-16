@@ -646,6 +646,20 @@ export default function AdminMainScreen({
     useState<Record<string, WorkerRemoteRow[]> | null>(null);
   const workersPersonnelFetchGenRef = useRef(0);
 
+  const workersCompanyByWorkerId = useMemo(() => {
+    const m = new Map<string, string | null>();
+    const bag = workersByGradeFromSupabase;
+    if (bag == null) return m;
+    for (const rows of Object.values(bag)) {
+      for (const w of rows) {
+        const id = w.worker_id.trim();
+        if (!id) continue;
+        m.set(id, w.company_name ?? null);
+      }
+    }
+    return m;
+  }, [workersByGradeFromSupabase]);
+
   const activeSheetKey =
     timesheetYear != null && timesheetMonth != null
       ? sheetKey(timesheetYear, timesheetMonth)
@@ -847,7 +861,8 @@ export default function AdminMainScreen({
               projectNameTrimmed,
               lastDay,
               WORKER_SLOT_COUNT,
-              diag
+              diag,
+              { workersCompanyByWorkerId }
             );
             if (source === "deps") {
               console.log(
@@ -869,7 +884,9 @@ export default function AdminMainScreen({
                 [],
                 projectNameTrimmed,
                 lastDay,
-                WORKER_SLOT_COUNT
+                WORKER_SLOT_COUNT,
+                undefined,
+                { workersCompanyByWorkerId }
               ),
             };
           }
@@ -893,8 +910,28 @@ export default function AdminMainScreen({
       timesheetMonth,
       selectedProjectId,
       projects,
+      workersCompanyByWorkerId,
     ]
   );
+
+  useEffect(() => {
+    if (!canShowProjectTimesheet) return;
+    if (getSupabaseBrowserClient() == null) return;
+    let cancelled = false;
+    void fetchWorkersGroupedByPersonnelGrade().then(({ byGrade, error }) => {
+      if (cancelled) return;
+      if (error != null && error !== "not_configured") {
+        console.error(
+          "[Supabase] workers prefetch for timesheet company fallback",
+          error
+        );
+      }
+      setWorkersByGradeFromSupabase(byGrade);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [canShowProjectTimesheet]);
 
   useEffect(() => {
     if (
