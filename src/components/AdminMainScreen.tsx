@@ -2702,9 +2702,7 @@ export default function AdminMainScreen({
                       className="relative cursor-default border border-slate-500 align-middle"
                       onContextMenu={(e) => e.preventDefault()}
                     >
-                      <div
-                        className={`${personnelDataCellInnerClass} font-medium`}
-                      >
+                      <div className={personnelDataCellInnerClass}>
                         {showBlank ? "\u00A0" : company}
                       </div>
                     </td>
@@ -2715,7 +2713,7 @@ export default function AdminMainScreen({
                   globalRi: number,
                   f: (typeof PERSONNEL_TABLE_FIELDS)[number]
                 ) => {
-                  const { field, inputType, mono, colAria, formatPhone } = f;
+                  const { field, inputType, colAria, formatPhone } = f;
                   const row = rowAt(globalRi);
                   const meta = displayMeta[globalRi];
                   const localIndex =
@@ -2732,13 +2730,6 @@ export default function AdminMainScreen({
                   const displayValue = formatPhone
                     ? formatKoreanPhoneDisplay(raw)
                     : raw;
-                  const personnelDataEmphasisClass =
-                    field === "name" || field === "phone"
-                      ? "font-semibold"
-                      : "";
-                  const personnelPhoneMonoClass = field === "phone"
-                    ? "font-mono tabular-nums"
-                    : "";
                   return (
                     <td
                       key={`${globalRi}-${String(field)}`}
@@ -2805,9 +2796,7 @@ export default function AdminMainScreen({
                               }
                             }}
                             onBlur={() => commitPersonnelEdit()}
-                            className={`box-border min-h-[1.85rem] min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-0.5 text-left text-[14px] outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-400/70 md:text-[15px] ${
-                              mono ? "font-mono tabular-nums font-semibold" : ""
-                            } ${field === "name" ? "font-semibold" : ""}`}
+                            className="box-border min-h-[1.85rem] min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-0.5 text-left text-[14px] leading-snug outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-400/70 md:text-[15px]"
                           />
                           <button
                             type="button"
@@ -2819,9 +2808,7 @@ export default function AdminMainScreen({
                           </button>
                         </div>
                       ) : (
-                        <div
-                          className={`${personnelDataCellInnerClass} ${personnelDataEmphasisClass} ${personnelPhoneMonoClass}`}
-                        >
+                        <div className={personnelDataCellInnerClass}>
                           {showBlank ? "\u00A0" : displayValue}
                         </div>
                       )}
