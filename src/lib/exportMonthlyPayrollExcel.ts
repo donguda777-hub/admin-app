@@ -10,12 +10,9 @@ const PAYROLL_EXCEL_HEADERS = [
   "\uC18C\uC18D",
   "\uC774\uB984",
   "\uC804\uD654\uBC88\uD638",
-  "\uC8FC\uBBFC\uBC88\uD638",
   "\uC138\uC804\uAE09\uC5EC",
   "\uC138\uD6C4\uAE09\uC5EC",
   "\uCD1D\uACF5\uC218",
-  "\uC740\uD589\uBA85",
-  "\uACC4\uC88C\uBC88\uD638",
 ] as const;
 
 function digitsOnly(s: string): string {
@@ -80,12 +77,9 @@ export function downloadMonthlyPayrollExcel(
       row.company,
       row.displayName,
       phoneDisplay,
-      "",
       preTax != null && Number.isFinite(preTax) ? preTax : "",
       postTax != null && Number.isFinite(postTax) ? postTax : "",
       effortCellForExcel(row.totalEffort),
-      "",
-      "",
     ]);
   }
 

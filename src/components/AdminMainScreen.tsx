@@ -3309,7 +3309,7 @@ export default function AdminMainScreen({
                 </div>
               </div>
               <div className="overflow-x-auto rounded border border-slate-300 bg-white shadow-sm">
-                <table className="w-full min-w-[72rem] table-fixed border-collapse border border-slate-400 text-[11px] md:text-sm">
+                <table className="w-full min-w-[52rem] table-fixed border-collapse border border-slate-400 text-[11px] md:text-sm">
                   <thead>
                     <tr className="bg-slate-200">
                       <th className="w-[3rem] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
@@ -3325,9 +3325,6 @@ export default function AdminMainScreen({
                         {"\uC804\uD654\uBC88\uD638"}
                       </th>
                       <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
-                        {"\uC8FC\uBBFC\uBC88\uD638"}
-                      </th>
-                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
                         {"\uC138\uC804\uAE09\uC5EC"}
                       </th>
                       <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
@@ -3336,19 +3333,13 @@ export default function AdminMainScreen({
                       <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
                         {"\uCD1D\uACF5\uC218"}
                       </th>
-                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
-                        {"\uC740\uD589\uBA85"}
-                      </th>
-                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
-                        {"\uACC4\uC88C\uBC88\uD638"}
-                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {timesheetYear == null || timesheetMonth == null ? (
                       <tr>
                         <td
-                          colSpan={10}
+                          colSpan={7}
                           className="border border-slate-400 px-3 py-6 text-center text-slate-600"
                         >
                           {
@@ -3359,7 +3350,7 @@ export default function AdminMainScreen({
                     ) : payrollRemoteFetchBusy ? (
                       <tr>
                         <td
-                          colSpan={10}
+                          colSpan={7}
                           className="border border-slate-400 px-3 py-6 text-center text-slate-600"
                         >
                           {
@@ -3370,7 +3361,7 @@ export default function AdminMainScreen({
                     ) : payrollRemoteFetchError != null ? (
                       <tr>
                         <td
-                          colSpan={10}
+                          colSpan={7}
                           className="border border-slate-400 px-3 py-6 text-center text-red-700"
                         >
                           {payrollRemoteFetchError === "not_configured"
@@ -3381,7 +3372,7 @@ export default function AdminMainScreen({
                     ) : monthlyPayrollRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={10}
+                          colSpan={7}
                           className="border border-slate-400 px-3 py-6 text-center text-slate-600"
                         >
                           {
@@ -3415,9 +3406,6 @@ export default function AdminMainScreen({
                             <td className="border border-slate-400 px-2 py-1.5 align-middle tabular-nums text-slate-800">
                               {phoneDisplay !== "" ? phoneDisplay : "\u00A0"}
                             </td>
-                            <td className="border border-slate-400 px-2 py-1.5 align-middle text-slate-800">
-                              {"\u00A0"}
-                            </td>
                             <td className="border border-slate-400 px-2 py-1.5 text-right align-middle tabular-nums text-slate-800">
                               {showAmountRows ? (
                                 preTax != null && Number.isFinite(preTax) ? (
@@ -3442,12 +3430,6 @@ export default function AdminMainScreen({
                             </td>
                             <td className="border border-slate-400 px-2 py-1.5 text-right align-middle tabular-nums text-slate-800">
                               {formatEffortFooterTotal(row.totalEffort) || "0"}
-                            </td>
-                            <td className="border border-slate-400 px-2 py-1.5 align-middle text-slate-800">
-                              {"\u00A0"}
-                            </td>
-                            <td className="border border-slate-400 px-2 py-1.5 align-middle text-slate-800">
-                              {"\u00A0"}
                             </td>
                           </tr>
                         );
