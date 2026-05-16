@@ -61,9 +61,10 @@ import {
   renameProjectNameWithWorkerEntriesInSupabase,
 } from "../lib/projectsFromSupabase";
 import { deleteWorkerDayEntriesForMonthProjectAndCompanyGroup } from "../lib/deleteWorkerDayEntriesFromSupabase";
+import { fetchWorkerDayEntriesForMonth } from "../lib/fetchWorkerDayEntriesForMonth";
 import {
   buildFlatWorkersByWorkerId,
-  computeMonthlyPayrollRows,
+  computeMonthlyPayrollRowsFromServerEntries,
 } from "../lib/monthlyPayrollAggregate";
 import {
   TIMESHEET_COMPANY_GROUP_NAMES,
@@ -675,7 +676,15 @@ export default function AdminMainScreen({
     } | null>(null);
   const [timesheetWorkerDeleteBusy, setTimesheetWorkerDeleteBusy] =
     useState(false);
-  /** Supabase workers ?????????? ?????????? ????? ????) */
+  /** 월급여: Supabase `worker_day_entries` 월간 전체 조회 결과 (`null` = 아직 로드 전/다른 화면) */
+  const [payrollRemoteEntries, setPayrollRemoteEntries] = useState<
+    WorkerDayEntryRemoteRow[] | null
+  >(null);
+  const [payrollRemoteFetchBusy, setPayrollRemoteFetchBusy] = useState(false);
+  const [payrollRemoteFetchError, setPayrollRemoteFetchError] = useState<
+    string | null
+  >(null);
+  /** Supabase `workers` 테이블에서 등급별로 불러온 작업자 (`null` = 아직 로드 전) */
   const [workersByGradeFromSupabase, setWorkersByGradeFromSupabase] =
     useState<Record<string, WorkerRemoteRow[]> | null>(null);
   const workersPersonnelFetchGenRef = useRef(0);
@@ -1259,34 +1268,54 @@ export default function AdminMainScreen({
     return sumFiniteNumbers(parts);
   }, [workerLnTotals]);
 
-  const monthlyPayrollRows = useMemo(() => {
+  useEffect(() => {
     if (
+      mainView !== "monthlyPayroll" ||
       timesheetYear == null ||
-      timesheetMonth == null ||
-      activeSheetKey == null
+      timesheetMonth == null
     ) {
-      return [];
+      setPayrollRemoteEntries(null);
+      setPayrollRemoteFetchBusy(false);
+      setPayrollRemoteFetchError(null);
+      return;
     }
+    let cancelled = false;
+    setPayrollRemoteFetchBusy(true);
+    setPayrollRemoteFetchError(null);
+    setPayrollRemoteEntries(null);
+    void fetchWorkerDayEntriesForMonth(timesheetYear, timesheetMonth).then(
+      ({ rows, error }) => {
+        if (cancelled) return;
+        setPayrollRemoteFetchBusy(false);
+        if (error != null) {
+          console.error("[Supabase] payroll worker_day_entries fetch failed", {
+            message: error,
+            year: timesheetYear,
+            month: timesheetMonth,
+          });
+          setPayrollRemoteFetchError(error);
+          setPayrollRemoteEntries([]);
+          return;
+        }
+        setPayrollRemoteEntries(rows);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [mainView, timesheetYear, timesheetMonth]);
+
+  const monthlyPayrollRows = useMemo(() => {
+    if (payrollRemoteEntries == null) return [];
     const workersByWorkerId = buildFlatWorkersByWorkerId(
       workersByGradeFromSupabase
     );
-    return computeMonthlyPayrollRows({
-      year: timesheetYear,
-      month1Based: timesheetMonth,
-      projects,
-      timesheetGrids,
+    return computeMonthlyPayrollRowsFromServerEntries(
+      payrollRemoteEntries,
       workerRatesByKey,
-      workersByWorkerId,
-    });
-  }, [
-    timesheetYear,
-    timesheetMonth,
-    activeSheetKey,
-    projects,
-    timesheetGrids,
-    workerRatesByKey,
-    workersByGradeFromSupabase,
-  ]);
+      workersByWorkerId
+    );
+  }, [payrollRemoteEntries, workerRatesByKey, workersByGradeFromSupabase]);
 
   const onYearClick = useCallback((y: number) => {
     setOpenYear((prev) => {
@@ -2977,7 +3006,7 @@ export default function AdminMainScreen({
                     </tr>
                   </thead>
                   <tbody>
-                    {activeSheetKey == null ? (
+                    {timesheetYear == null || timesheetMonth == null ? (
                       <tr>
                         <td
                           colSpan={4}
@@ -2986,6 +3015,28 @@ export default function AdminMainScreen({
                           {
                             "\uC5F0\uB3C4\uC640 \uC6D4\uC744 \uC120\uD0DD\uD558\uBA74 \uC6D4\uAE09\uC5EC \uC9D1\uACC4\uAC00 \uD45C\uC2DC\uB429\uB2C8\uB2E4."
                           }
+                        </td>
+                      </tr>
+                    ) : payrollRemoteFetchBusy ? (
+                      <tr>
+                        <td
+                          colSpan={4}
+                          className="border border-slate-400 px-3 py-6 text-center text-slate-600"
+                        >
+                          {
+                            "\uC11C\uBC84\uC5D0\uC11C \uACF5\uC218 \uB370\uC774\uD130\uB97C \uBD88\uB7EC\uC624\uB294 \uC911\uC785\uB2C8\uB2E4\u2026"
+                          }
+                        </td>
+                      </tr>
+                    ) : payrollRemoteFetchError != null ? (
+                      <tr>
+                        <td
+                          colSpan={4}
+                          className="border border-slate-400 px-3 py-6 text-center text-red-700"
+                        >
+                          {payrollRemoteFetchError === "not_configured"
+                            ? "Supabase\uAC00 \uC124\uC815\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. .env.local\uC744 \uD655\uC778\uD558\uC138\uC694."
+                            : payrollRemoteFetchError}
                         </td>
                       </tr>
                     ) : monthlyPayrollRows.length === 0 ? (

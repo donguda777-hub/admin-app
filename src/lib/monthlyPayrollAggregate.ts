@@ -1,24 +1,9 @@
 import {
-  WORKER_COLUMN_COUNT,
-  bodyCellKey,
-  defaultTimesheetGridPersisted,
-  normalizeTimesheetProjectName,
-  resolveWorkerRatesForSlot,
-  timesheetGridStorageKey,
-  timesheetWorkerIdCellKey,
-  timesheetWorkerNameCellKey,
-  type TimesheetGridPersisted,
+  workerRateStorageKey,
   type WorkerRatePersist,
 } from "../adminPersist";
+import type { WorkerDayEntryRemoteRow } from "./mergeWorkerDayEntriesFromRemote";
 import type { WorkerRemoteRow } from "./personnelWorkersFromSupabase";
-
-function parseEffortCellValue(raw: string): number {
-  const t = raw.trim().replace(/,/g, ".").replace(/\s+/g, "");
-  if (t === "") return 0;
-  const n = Number.parseFloat(t);
-  if (!Number.isFinite(n)) return 0;
-  return n;
-}
 
 /** Supabase workers를 worker_id 단일 맵으로 평탄화 */
 export function buildFlatWorkersByWorkerId(
@@ -35,13 +20,42 @@ export function buildFlatWorkersByWorkerId(
   return m;
 }
 
+function normalizeProjectKey(s: string): string {
+  return s.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 function phoneLast4FromWorkerId(workerId: string): string {
   const id = workerId.trim();
   if (id.length >= 4) return id.slice(-4);
   return "";
 }
 
-type Acc = {
+function parseWorkHours(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string") {
+    const n = Number.parseFloat(raw.trim().replace(/,/g, "."));
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+function resolveRatesForWorker(
+  workerId: string,
+  workerName: string,
+  workerRatesByKey: Record<string, WorkerRatePersist>
+): WorkerRatePersist {
+  const name = workerName.trim();
+  const wid = workerId.trim();
+  const primary = workerRatesByKey[workerRateStorageKey(wid || null, name)];
+  if (primary != null) return primary;
+  if (wid !== "") {
+    const byName = workerRatesByKey[workerRateStorageKey(null, name)];
+    if (byName != null) return byName;
+  }
+  return { base: null, spread: null };
+}
+
+type WorkerAccumulator = {
   totalEffort: number;
   totalNetPay: number | null;
   baseName: string;
@@ -49,7 +63,6 @@ type Acc = {
 };
 
 export type MonthlyPayrollRow = {
-  /** 내부 집계 키 (id:… / name:…) */
   workerKey: string;
   workerId: string;
   baseName: string;
@@ -60,98 +73,99 @@ export type MonthlyPayrollRow = {
   totalNetPay: number | null;
 };
 
+const PROJ_WORKER_SEP = "\u001f";
+
 /**
- * 선택 연·월의 모든 프로젝트 공수표 그리드에서 작업자별 총공수·실급여(기존 공수표와 동일 식)를 합산한다.
+ * `worker_day_entries` 월간 전체 행으로 작업자별 총공수·실급여를 합산한다.
+ * 프로젝트·작업자별로 공수를 먼저 합친 뒤, 프로젝트 단위로 round((base-spread)×공수)한 실급여를 작업자별로 합산한다.
+ * 단가는 공수표와 동일하게 `workerRatesByKey`만 사용한다(그리드/레거시 슬롯 단가 없음).
  */
-export function computeMonthlyPayrollRows(params: {
-  year: number;
-  month1Based: number;
-  projects: readonly { name: string }[];
-  timesheetGrids: Record<string, TimesheetGridPersisted>;
-  workerRatesByKey: Record<string, WorkerRatePersist>;
-  workersByWorkerId: Map<string, WorkerRemoteRow>;
-}): MonthlyPayrollRow[] {
-  const {
-    year,
-    month1Based,
-    projects,
-    timesheetGrids,
-    workerRatesByKey,
-    workersByWorkerId,
-  } = params;
+export function computeMonthlyPayrollRowsFromServerEntries(
+  entries: readonly WorkerDayEntryRemoteRow[],
+  workerRatesByKey: Record<string, WorkerRatePersist>,
+  workersByWorkerId: Map<string, WorkerRemoteRow>
+): MonthlyPayrollRow[] {
+  type Bucket = { effort: number; workerId: string; workerName: string };
+  const effortByProjectWorker = new Map<string, Bucket>();
 
-  const y = year;
-  const m0 = month1Based - 1;
-  const last = new Date(y, m0 + 1, 0).getDate();
-  const days = Array.from({ length: last }, (_, i) => i + 1);
+  for (const row of entries) {
+    if (row == null || typeof row !== "object") continue;
+    if (row.deleted_at != null && String(row.deleted_at).trim() !== "") {
+      continue;
+    }
+    const wname = String(row.worker_name ?? "").trim();
+    if (!wname) continue;
+    const pn = String(row.project_name ?? "").trim();
+    if (!pn) continue;
+    const h = parseWorkHours(row.work_hours);
+    if (!Number.isFinite(h) || h <= 0) continue;
 
-  const byKey = new Map<string, Acc>();
+    const wid = String(row.worker_id ?? "").trim();
+    const wkey = wid !== "" ? `id:${wid}` : `name:${wname.replace(/\s+/g, " ")}`;
+    const pkey = normalizeProjectKey(pn);
+    const pw = `${pkey}${PROJ_WORKER_SEP}${wkey}`;
 
-  for (const p of projects) {
-    const nameNorm = normalizeTimesheetProjectName(p.name);
-    if (!nameNorm) continue;
+    const prev = effortByProjectWorker.get(pw);
+    if (prev == null) {
+      effortByProjectWorker.set(pw, {
+        effort: h,
+        workerId: wid,
+        workerName: wname,
+      });
+    } else {
+      prev.effort += h;
+      if (wid !== "" && prev.workerId === "") prev.workerId = wid;
+    }
+  }
 
-    const gridKey = timesheetGridStorageKey(year, month1Based, nameNorm);
-    const grid = timesheetGrids[gridKey] ?? defaultTimesheetGridPersisted();
-    const body = grid.body ?? {};
+  const byWorker = new Map<string, WorkerAccumulator>();
 
-    for (let wi = 0; wi < WORKER_COLUMN_COUNT; wi++) {
-      const wname = (body[timesheetWorkerNameCellKey(wi)] ?? "").trim();
-      if (!wname) continue;
+  for (const { effort, workerId, workerName } of effortByProjectWorker.values()) {
+    const wkey =
+      workerId !== ""
+        ? `id:${workerId}`
+        : `name:${workerName.replace(/\s+/g, " ")}`;
 
-      const wid = (body[timesheetWorkerIdCellKey(wi)] ?? "").trim();
-      const aggKey = wid !== "" ? `id:${wid}` : `name:${wname.replace(/\s+/g, " ")}`;
+    const { base, spread } = resolveRatesForWorker(
+      workerId,
+      workerName,
+      workerRatesByKey
+    );
+    let net: number | null = null;
+    if (
+      base != null &&
+      spread != null &&
+      Number.isFinite(base) &&
+      Number.isFinite(spread)
+    ) {
+      net = Math.round((base - spread) * effort);
+    }
 
-      let effort = 0;
-      for (const day of days) {
-        effort += parseEffortCellValue(body[bodyCellKey(day, wi)] ?? "");
+    const remote = workerId ? workersByWorkerId.get(workerId) : undefined;
+    const baseName = (remote?.worker_name ?? workerName).trim();
+
+    const acc = byWorker.get(wkey);
+    if (acc == null) {
+      byWorker.set(wkey, {
+        totalEffort: effort,
+        totalNetPay: net,
+        baseName,
+        workerId: workerId,
+      });
+    } else {
+      acc.totalEffort += effort;
+      if (net != null) {
+        acc.totalNetPay =
+          acc.totalNetPay == null ? net : acc.totalNetPay + net;
       }
-      if (effort === 0) continue;
-
-      const { base, spread } = resolveWorkerRatesForSlot(
-        wi,
-        body,
-        workerRatesByKey,
-        grid
-      );
-      let net: number | null = null;
-      if (
-        base != null &&
-        spread != null &&
-        Number.isFinite(base) &&
-        Number.isFinite(spread)
-      ) {
-        net = Math.round((base - spread) * effort);
-      }
-
-      const remote = wid ? workersByWorkerId.get(wid) : undefined;
-      const baseName = (remote?.worker_name ?? wname).trim();
-
-      const prev = byKey.get(aggKey);
-      if (prev == null) {
-        byKey.set(aggKey, {
-          totalEffort: effort,
-          totalNetPay: net,
-          baseName,
-          workerId: wid,
-        });
-      } else {
-        prev.totalEffort += effort;
-        if (net != null) {
-          prev.totalNetPay =
-            prev.totalNetPay == null
-              ? net
-              : prev.totalNetPay + net;
-        }
-        if (wid !== "" && prev.workerId === "") prev.workerId = wid;
-        const bn = (remote?.worker_name ?? prev.baseName).trim();
-        if (bn) prev.baseName = bn;
-      }
+      if (workerId !== "" && acc.workerId === "") acc.workerId = workerId;
+      const bn = (remote?.worker_name ?? acc.baseName).trim();
+      if (bn) acc.baseName = bn;
     }
   }
 
   const rows: MonthlyPayrollRow[] = [];
-  for (const [key, acc] of byKey) {
+  for (const [key, acc] of byWorker) {
     const wid = acc.workerId;
     const remote = wid ? workersByWorkerId.get(wid) : undefined;
     const baseName = (remote?.worker_name ?? acc.baseName).trim();
