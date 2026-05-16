@@ -2683,6 +2683,9 @@ export default function AdminMainScreen({
                 const rowAt = (gi: number): PersonnelRowPersist =>
                   displayRows[gi] ?? emptyRow;
 
+                const personnelDataCellInnerClass =
+                  "flex min-h-[1.85rem] items-center truncate px-1 py-0.5 text-left text-[14px] leading-snug md:text-[15px]";
+
                 const renderCompanyCell = (globalRi: number) => {
                   const row = rowAt(globalRi);
                   const meta = displayMeta[globalRi];
@@ -2699,7 +2702,9 @@ export default function AdminMainScreen({
                       className="relative cursor-default border border-slate-500 align-middle"
                       onContextMenu={(e) => e.preventDefault()}
                     >
-                      <div className="min-h-[1.75rem] truncate px-1 py-0.5 text-left text-[12px] leading-tight md:text-[13px]">
+                      <div
+                        className={`${personnelDataCellInnerClass} font-medium`}
+                      >
                         {showBlank ? "\u00A0" : company}
                       </div>
                     </td>
@@ -2727,6 +2732,13 @@ export default function AdminMainScreen({
                   const displayValue = formatPhone
                     ? formatKoreanPhoneDisplay(raw)
                     : raw;
+                  const personnelDataEmphasisClass =
+                    field === "name" || field === "phone"
+                      ? "font-semibold"
+                      : "";
+                  const personnelPhoneMonoClass = field === "phone"
+                    ? "font-mono tabular-nums"
+                    : "";
                   return (
                     <td
                       key={`${globalRi}-${String(field)}`}
@@ -2751,7 +2763,7 @@ export default function AdminMainScreen({
                     >
                       {isEditing ? (
                         <div
-                          className="flex items-stretch gap-0.5 px-0.5 py-0.5"
+                          className="flex min-h-[1.85rem] items-stretch gap-0.5 px-0.5 py-0.5"
                           onClick={(ev) => ev.stopPropagation()}
                         >
                           <input
@@ -2793,9 +2805,9 @@ export default function AdminMainScreen({
                               }
                             }}
                             onBlur={() => commitPersonnelEdit()}
-                            className={`box-border min-h-[1.75rem] min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-0.5 text-left text-[12px] outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-400/70 md:text-[13px] ${
-                              mono ? "font-mono tabular-nums" : ""
-                            }`}
+                            className={`box-border min-h-[1.85rem] min-w-0 flex-1 rounded border border-slate-300 bg-white px-1 py-0.5 text-left text-[14px] outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-400/70 md:text-[15px] ${
+                              mono ? "font-mono tabular-nums font-semibold" : ""
+                            } ${field === "name" ? "font-semibold" : ""}`}
                           />
                           <button
                             type="button"
@@ -2807,7 +2819,9 @@ export default function AdminMainScreen({
                           </button>
                         </div>
                       ) : (
-                        <div className="min-h-[1.75rem] truncate px-1 py-0.5 text-left text-[12px] leading-tight md:text-[13px]">
+                        <div
+                          className={`${personnelDataCellInnerClass} ${personnelDataEmphasisClass} ${personnelPhoneMonoClass}`}
+                        >
                           {showBlank ? "\u00A0" : displayValue}
                         </div>
                       )}
@@ -2819,7 +2833,7 @@ export default function AdminMainScreen({
                   baseOffset: number,
                   rowCount: number
                 ) => (
-                  <table className="w-full min-w-[14rem] table-fixed border-collapse border border-slate-500 text-[12px] leading-tight md:text-[13px]">
+                  <table className="w-full min-w-[14rem] table-fixed border-collapse border border-slate-500">
                     <colgroup>
                       <col style={{ width: "20%" }} />
                       <col style={{ width: "22%" }} />
