@@ -947,7 +947,6 @@ export default function AdminMainScreen({
   const openTimesheetWorkerNameContextMenu = useCallback(
     (e: MouseEvent<HTMLButtonElement>, wi: number) => {
       if (adminRole !== "MASTER") return;
-      e.preventDefault();
       const name = (
         activeTimesheetGrid.body[timesheetWorkerNameCellKey(wi)] ?? ""
       ).trim();
@@ -3193,6 +3192,7 @@ export default function AdminMainScreen({
                               type="button"
                               onClick={() => openWorkerRateDialog(wi)}
                               onContextMenu={(e) => {
+                                e.preventDefault();
                                 openTimesheetWorkerNameContextMenu(e, wi);
                               }}
                               className="box-border flex min-h-[1.75rem] w-full max-w-full cursor-pointer items-center justify-center px-1 py-1 text-center text-[10px] font-semibold leading-snug text-slate-900 underline decoration-slate-400 decoration-dotted underline-offset-2 hover:bg-teal-50 hover:text-teal-900 md:text-[11px] break-words"
