@@ -66,6 +66,7 @@ import {
   type MonthlyPayrollRow,
 } from "../lib/loadMonthlyPayrollData";
 import { computeMonthlyPayrollPostTax } from "../lib/monthlyPayrollAggregate";
+import { downloadMonthlyPayrollExcel } from "../lib/exportMonthlyPayrollExcel";
 import {
   TIMESHEET_COMPANY_GROUP_NAMES,
   companyWorkerSlotRanges,
@@ -2079,6 +2080,39 @@ export default function AdminMainScreen({
     setPersonnelDeleteConfirm(null);
   }, []);
 
+  const handleExportMonthlyPayrollExcel = useCallback(() => {
+    if (timesheetYear == null || timesheetMonth == null) {
+      window.alert(
+        "\uC5F0\uB3C4\uC640 \uC6D4\uC744 \uC120\uD0DD\uD558\uC138\uC694."
+      );
+      return;
+    }
+    if (payrollRemoteFetchBusy) return;
+    if (monthlyPayrollRows.length === 0) {
+      window.alert(
+        "\uD574\uB2F9 \uC6D4\uC5D0 \uB0B4\uBCF4\uB0BC \uC6D4\uAE09\uC5EC \uB370\uC774\uD130\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."
+      );
+      return;
+    }
+    try {
+      downloadMonthlyPayrollExcel(
+        monthlyPayrollRows,
+        timesheetYear,
+        timesheetMonth
+      );
+    } catch (e) {
+      console.error("[monthlyPayroll] excel export failed", e);
+      window.alert(
+        "\uC5D1\uC140 \uD30C\uC77C \uC0DD\uC131\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4."
+      );
+    }
+  }, [
+    timesheetYear,
+    timesheetMonth,
+    monthlyPayrollRows,
+    payrollRemoteFetchBusy,
+  ]);
+
   const closeIdAdminUi = useCallback(() => {
     setIdHeaderMenuOpen(false);
     setCreateAccountModalOpen(false);
@@ -3250,13 +3284,29 @@ export default function AdminMainScreen({
                     ? `${timesheetYear}\uB144 ${timesheetMonth}\uC6D4 \uC6D4\uAE09\uC5EC`
                     : "\uC6D4\uAE09\uC5EC"}
                 </h2>
-                <button
-                  type="button"
-                  onClick={goToTimesheetView}
-                  className="shrink-0 rounded-md border border-teal-600 bg-teal-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 md:text-sm"
-                >
-                  {"\uACF5\uC218\uD45C"}
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleExportMonthlyPayrollExcel}
+                    disabled={
+                      timesheetYear == null ||
+                      timesheetMonth == null ||
+                      payrollRemoteFetchBusy ||
+                      monthlyPayrollRows.length === 0
+                    }
+                    className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 md:text-sm"
+                    aria-label={"\uC6D4\uAE09\uC5EC \uC5D1\uC140\uB85C \uB0B4\uBCF4\uB0B4\uAE30"}
+                  >
+                    {"\uC5D1\uC140"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={goToTimesheetView}
+                    className="shrink-0 rounded-md border border-teal-600 bg-teal-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 md:text-sm"
+                  >
+                    {"\uACF5\uC218\uD45C"}
+                  </button>
+                </div>
               </div>
               <div className="overflow-x-auto rounded border border-slate-300 bg-white shadow-sm">
                 <table className="w-full min-w-[64rem] table-fixed border-collapse border border-slate-400 text-[11px] md:text-sm">
