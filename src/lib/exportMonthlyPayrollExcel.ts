@@ -6,6 +6,7 @@ import {
 } from "./monthlyPayrollAggregate";
 
 const PAYROLL_EXCEL_HEADERS = [
+  "NO.",
   "\uC18C\uC18D",
   "\uC774\uB984",
   "\uC804\uD654\uBC88\uD638",
@@ -13,6 +14,7 @@ const PAYROLL_EXCEL_HEADERS = [
   "\uC138\uC804\uAE09\uC5EC",
   "\uC138\uD6C4\uAE09\uC5EC",
   "\uCD1D\uACF5\uC218",
+  "\uC740\uD589\uBA85",
   "\uACC4\uC88C\uBC88\uD638",
 ] as const;
 
@@ -64,7 +66,8 @@ export function downloadMonthlyPayrollExcel(
 ): void {
   const sheetRows: (string | number)[][] = [Array.from(PAYROLL_EXCEL_HEADERS)];
 
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
     const preTax = row.totalNetPay;
     const postTax = computeMonthlyPayrollPostTax(preTax);
     const phoneDigits = digitsOnly(row.phone);
@@ -73,6 +76,7 @@ export function downloadMonthlyPayrollExcel(
       : "";
 
     sheetRows.push([
+      i + 1,
       row.company,
       row.displayName,
       phoneDisplay,
@@ -80,6 +84,7 @@ export function downloadMonthlyPayrollExcel(
       preTax != null && Number.isFinite(preTax) ? preTax : "",
       postTax != null && Number.isFinite(postTax) ? postTax : "",
       effortCellForExcel(row.totalEffort),
+      "",
       "",
     ]);
   }

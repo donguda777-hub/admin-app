@@ -3309,9 +3309,12 @@ export default function AdminMainScreen({
                 </div>
               </div>
               <div className="overflow-x-auto rounded border border-slate-300 bg-white shadow-sm">
-                <table className="w-full min-w-[64rem] table-fixed border-collapse border border-slate-400 text-[11px] md:text-sm">
+                <table className="w-full min-w-[72rem] table-fixed border-collapse border border-slate-400 text-[11px] md:text-sm">
                   <thead>
                     <tr className="bg-slate-200">
+                      <th className="w-[3rem] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        NO.
+                      </th>
                       <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
                         {"\uC18C\uC18D"}
                       </th>
@@ -3334,6 +3337,9 @@ export default function AdminMainScreen({
                         {"\uCD1D\uACF5\uC218"}
                       </th>
                       <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        {"\uC740\uD589\uBA85"}
+                      </th>
+                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
                         {"\uACC4\uC88C\uBC88\uD638"}
                       </th>
                     </tr>
@@ -3342,7 +3348,7 @@ export default function AdminMainScreen({
                     {timesheetYear == null || timesheetMonth == null ? (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={10}
                           className="border border-slate-400 px-3 py-6 text-center text-slate-600"
                         >
                           {
@@ -3353,7 +3359,7 @@ export default function AdminMainScreen({
                     ) : payrollRemoteFetchBusy ? (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={10}
                           className="border border-slate-400 px-3 py-6 text-center text-slate-600"
                         >
                           {
@@ -3364,7 +3370,7 @@ export default function AdminMainScreen({
                     ) : payrollRemoteFetchError != null ? (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={10}
                           className="border border-slate-400 px-3 py-6 text-center text-red-700"
                         >
                           {payrollRemoteFetchError === "not_configured"
@@ -3375,7 +3381,7 @@ export default function AdminMainScreen({
                     ) : monthlyPayrollRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={10}
                           className="border border-slate-400 px-3 py-6 text-center text-slate-600"
                         >
                           {
@@ -3384,7 +3390,7 @@ export default function AdminMainScreen({
                         </td>
                       </tr>
                     ) : (
-                      monthlyPayrollRows.map((row) => {
+                      monthlyPayrollRows.map((row, rowIndex) => {
                         const preTax = row.totalNetPay;
                         const postTax = computeMonthlyPayrollPostTax(preTax);
                         const phoneDigits = digitsOnly(row.phone);
@@ -3397,6 +3403,9 @@ export default function AdminMainScreen({
                             key={row.workerKey}
                             className="bg-white even:bg-slate-50/80"
                           >
+                            <td className="border border-slate-400 px-2 py-1.5 text-center align-middle tabular-nums text-slate-800">
+                              {rowIndex + 1}
+                            </td>
                             <td className="border border-slate-400 px-2 py-1.5 align-middle text-slate-800">
                               {row.company !== "" ? row.company : "\u00A0"}
                             </td>
@@ -3433,6 +3442,9 @@ export default function AdminMainScreen({
                             </td>
                             <td className="border border-slate-400 px-2 py-1.5 text-right align-middle tabular-nums text-slate-800">
                               {formatEffortFooterTotal(row.totalEffort) || "0"}
+                            </td>
+                            <td className="border border-slate-400 px-2 py-1.5 align-middle text-slate-800">
+                              {"\u00A0"}
                             </td>
                             <td className="border border-slate-400 px-2 py-1.5 align-middle text-slate-800">
                               {"\u00A0"}
