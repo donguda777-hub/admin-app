@@ -31,6 +31,11 @@ export function canManageAdminAccounts(role: AdminRole): boolean {
   return role === "MASTER";
 }
 
+/** 월급여 화면 (마스터 donguda 전용) */
+export function canAccessMonthlyPayroll(role: AdminRole): boolean {
+  return role === "MASTER";
+}
+
 /** 급여·실급여·L&N 행/열 표시 */
 export function canViewAmountRows(role: AdminRole): boolean {
   return role === "MASTER" || role === "AMOUNT_ADMIN";

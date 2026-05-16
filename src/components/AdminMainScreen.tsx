@@ -84,6 +84,7 @@ import {
 } from "../auth/masterCredentials";
 import {
   EXTRA_ADMIN_ROLE_LABELS,
+  canAccessMonthlyPayroll,
   canManageAdminAccounts,
   canUnlockAmountRows,
   canViewAmountRows,
@@ -663,6 +664,7 @@ export default function AdminMainScreen({
   );
 
   const canManageAccounts = canManageAdminAccounts(adminRole);
+  const canShowMonthlyPayroll = canAccessMonthlyPayroll(adminRole);
   const showAmountRows = canViewAmountRows(adminRole);
   const showAmountUnlock = canUnlockAmountRows(adminRole);
 
@@ -670,6 +672,12 @@ export default function AdminMainScreen({
     if (showAmountRows) return FOOTER_LABELS;
     return FOOTER_LABELS.filter((l) => l === FOOTER_EFFORT_LABEL);
   }, [showAmountRows]);
+
+  useEffect(() => {
+    if (mainView === "monthlyPayroll" && !canShowMonthlyPayroll) {
+      setMainView("timesheet");
+    }
+  }, [mainView, canShowMonthlyPayroll]);
 
   const [idHeaderMenuOpen, setIdHeaderMenuOpen] = useState(false);
   const [createAccountModalOpen, setCreateAccountModalOpen] = useState(false);
@@ -1363,6 +1371,7 @@ export default function AdminMainScreen({
 
   useEffect(() => {
     if (
+      !canShowMonthlyPayroll ||
       mainView !== "monthlyPayroll" ||
       timesheetYear == null ||
       timesheetMonth == null
@@ -1398,7 +1407,13 @@ export default function AdminMainScreen({
     return () => {
       cancelled = true;
     };
-  }, [mainView, timesheetYear, timesheetMonth, workerRatesByKey]);
+  }, [
+    canShowMonthlyPayroll,
+    mainView,
+    timesheetYear,
+    timesheetMonth,
+    workerRatesByKey,
+  ]);
 
   const onYearClick = useCallback((y: number) => {
     setOpenYear((prev) => {
@@ -2572,7 +2587,11 @@ export default function AdminMainScreen({
   }, [mainView, selectedPersonnelGrade]);
 
   useEffect(() => {
-    if (mainView !== "personnel" && mainView !== "monthlyPayroll") return;
+    if (
+      mainView !== "personnel" &&
+      !(mainView === "monthlyPayroll" && canShowMonthlyPayroll)
+    )
+      return;
     const gen = ++workersPersonnelFetchGenRef.current;
     void fetchWorkersGroupedByPersonnelGrade().then(({ byGrade, error }) => {
       if (workersPersonnelFetchGenRef.current !== gen) return;
@@ -2587,7 +2606,7 @@ export default function AdminMainScreen({
     return () => {
       workersPersonnelFetchGenRef.current += 1;
     };
-  }, [mainView]);
+  }, [mainView, canShowMonthlyPayroll]);
 
   const personnelDisplayForGrade = useMemo(() => {
     if (selectedPersonnelGrade == null) {
@@ -2697,23 +2716,27 @@ export default function AdminMainScreen({
               ) : null}
               </div>
             ) : null}
-            <button
-              type="button"
-              aria-current={mainView === "monthlyPayroll" ? "page" : undefined}
-              onClick={() => {
-                setIdHeaderMenuOpen(false);
-                setPersonnelMenuOpen(false);
-                setMainView("monthlyPayroll");
-                setOpenYear(null);
-              }}
-              className={`whitespace-nowrap rounded-md border px-2 py-1.5 text-[11px] font-semibold shadow-sm transition active:bg-slate-100 md:px-2.5 md:text-xs ${
-                mainView === "monthlyPayroll"
-                  ? "border-teal-600 bg-teal-600 text-white hover:bg-teal-700"
-                  : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
-              }`}
-            >
-              {"\uC6D4\uAE09\uC5EC"}
-            </button>
+            {canShowMonthlyPayroll ? (
+              <button
+                type="button"
+                aria-current={
+                  mainView === "monthlyPayroll" ? "page" : undefined
+                }
+                onClick={() => {
+                  setIdHeaderMenuOpen(false);
+                  setPersonnelMenuOpen(false);
+                  setMainView("monthlyPayroll");
+                  setOpenYear(null);
+                }}
+                className={`whitespace-nowrap rounded-md border px-2 py-1.5 text-[11px] font-semibold shadow-sm transition active:bg-slate-100 md:px-2.5 md:text-xs ${
+                  mainView === "monthlyPayroll"
+                    ? "border-teal-600 bg-teal-600 text-white hover:bg-teal-700"
+                    : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
+                }`}
+              >
+                {"\uC6D4\uAE09\uC5EC"}
+              </button>
+            ) : null}
             <div className="relative" data-personnel-header-slot="">
               <button
                 type="button"
@@ -2760,7 +2783,7 @@ export default function AdminMainScreen({
       </header>
 
       {mainView === "timesheet" ||
-      mainView === "monthlyPayroll" ||
+      (mainView === "monthlyPayroll" && canShowMonthlyPayroll) ||
       mainView === "personnel" ? (
         <>
           {/* ???? ??? ???, ?????????? ???????overflow ???? */}
@@ -3168,7 +3191,7 @@ export default function AdminMainScreen({
                 );
               })()}
             </div>
-          ) : mainView === "monthlyPayroll" ? (
+          ) : mainView === "monthlyPayroll" && canShowMonthlyPayroll ? (
             <>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-0.5 md:px-1">
                 <h2 className="min-w-0 flex-1 text-center text-sm font-bold text-slate-800 md:text-base">
