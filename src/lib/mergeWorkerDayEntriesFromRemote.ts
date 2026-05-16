@@ -54,7 +54,11 @@ function normalizeProjectKey(s: string): string {
 /** 집계 키: 일·작업자명·업체그룹(0–3 또는 na) */
 const AGG_KEY_SEP = "\u001f";
 
-function companyGroupSuffixForEntryRow(
+/**
+ * 공수표 업체 열 배치와 동일한 기준으로 `worker_day_entries` 행의 업체 그룹 접미사를 계산한다.
+ * (`"0"`…`"3"` 또는 `"na"`)
+ */
+export function timesheetCompanyGroupSuffixForRemoteRow(
   row: WorkerDayEntryRemoteRow,
   workersCompanyByWorkerId: ReadonlyMap<string, string | null> | null | undefined
 ): string {
@@ -132,7 +136,7 @@ function fillBodyFromRemoteWorkerDayRows(params: {
           ? Number.parseFloat(String(hRaw).trim().replace(/,/g, "."))
           : Number.NaN;
     if (!Number.isFinite(h) || h <= 0) continue;
-    const groupSuffix = companyGroupSuffixForEntryRow(
+    const groupSuffix = timesheetCompanyGroupSuffixForRemoteRow(
       row,
       workersCompanyByWorkerId
     );

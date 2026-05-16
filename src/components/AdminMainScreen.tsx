@@ -60,7 +60,11 @@ import {
   normalizeProjectName,
   renameProjectNameWithWorkerEntriesInSupabase,
 } from "../lib/projectsFromSupabase";
-import { TIMESHEET_COMPANY_GROUP_NAMES } from "../lib/timesheetCompanyGroups";
+import { deleteWorkerDayEntriesForMonthProjectAndCompanyGroup } from "../lib/deleteWorkerDayEntriesFromSupabase";
+import {
+  TIMESHEET_COMPANY_GROUP_NAMES,
+  companyWorkerSlotRanges,
+} from "../lib/timesheetCompanyGroups";
 import { getSupabaseBrowserClient } from "../lib/supabaseClient";
 import {
   MASTER_ADMIN_ID,
@@ -135,6 +139,18 @@ const COL_DAY_PCT = 2.5;
 const COL_SUM_PCT = 11;
 const COL_WORKER_PCT =
   (100 - COL_DAY_PCT - COL_SUM_PCT) / WORKER_SLOT_COUNT;
+
+function workerSlotCompanyGroupIndex(
+  wi: number,
+  counts: readonly number[]
+): number | null {
+  const ranges = companyWorkerSlotRanges(counts);
+  for (let gi = 0; gi < ranges.length; gi++) {
+    const { start, end } = ranges[gi]!;
+    if (wi >= start && wi < end) return gi;
+  }
+  return null;
+}
 
 /** ????????? ????? ????? (1?????, ???? ?????????) */
 function digitsOnly(s: string): string {
@@ -642,6 +658,19 @@ export default function AdminMainScreen({
     grade: string;
     rowIndex: number;
   } | null>(null);
+  const [timesheetWorkerNameMenu, setTimesheetWorkerNameMenu] = useState<{
+    workerSlotIndex: number;
+    companyGroupIndex: number;
+    left: number;
+    top: number;
+  } | null>(null);
+  const [timesheetWorkerDeleteConfirm, setTimesheetWorkerDeleteConfirm] =
+    useState<{
+      workerSlotIndex: number;
+      companyGroupIndex: number;
+    } | null>(null);
+  const [timesheetWorkerDeleteBusy, setTimesheetWorkerDeleteBusy] =
+    useState(false);
   /** Supabase workers ?????????? ?????????? ????? ????) */
   const [workersByGradeFromSupabase, setWorkersByGradeFromSupabase] =
     useState<Record<string, WorkerRemoteRow[]> | null>(null);
@@ -915,6 +944,98 @@ export default function AdminMainScreen({
     ]
   );
 
+  const openTimesheetWorkerNameContextMenu = useCallback(
+    (e: MouseEvent<HTMLButtonElement>, wi: number) => {
+      if (adminRole !== "MASTER") return;
+      e.preventDefault();
+      const name = (
+        activeTimesheetGrid.body[timesheetWorkerNameCellKey(wi)] ?? ""
+      ).trim();
+      if (name === "") return;
+      const gi = workerSlotCompanyGroupIndex(wi, activeCompanyWorkerSlotCounts);
+      if (gi == null) return;
+      setTimesheetWorkerNameMenu({
+        workerSlotIndex: wi,
+        companyGroupIndex: gi,
+        left: e.clientX,
+        top: e.clientY,
+      });
+    },
+    [adminRole, activeTimesheetGrid.body, activeCompanyWorkerSlotCounts]
+  );
+
+  const requestTimesheetWorkerMonthRecordDelete = useCallback(() => {
+    if (timesheetWorkerNameMenu == null) return;
+    const { workerSlotIndex, companyGroupIndex } = timesheetWorkerNameMenu;
+    setTimesheetWorkerNameMenu(null);
+    setTimesheetWorkerDeleteConfirm({
+      workerSlotIndex,
+      companyGroupIndex,
+    });
+  }, [timesheetWorkerNameMenu]);
+
+  const cancelTimesheetWorkerMonthRecordDelete = useCallback(() => {
+    setTimesheetWorkerDeleteConfirm(null);
+  }, []);
+
+  const confirmTimesheetWorkerMonthRecordDelete = useCallback(async () => {
+    if (timesheetWorkerDeleteConfirm == null) return;
+    if (
+      timesheetYear == null ||
+      timesheetMonth == null ||
+      activeProject == null
+    ) {
+      setTimesheetWorkerDeleteConfirm(null);
+      return;
+    }
+    const wi = timesheetWorkerDeleteConfirm.workerSlotIndex;
+    const gi = timesheetWorkerDeleteConfirm.companyGroupIndex;
+    const workerId = (
+      activeTimesheetGrid.body[timesheetWorkerIdCellKey(wi)] ?? ""
+    ).trim();
+    if (!workerId) {
+      window.alert(
+        "\uC791\uC5C5\uC790 ID\uAC00 \uC5C6\uC5B4 \uC11C\uBC84 \uAE30\uB85D\uC744 \uC0AD\uC81C\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."
+      );
+      setTimesheetWorkerDeleteConfirm(null);
+      return;
+    }
+    const projectNameTrimmed = activeProject.name.trim();
+    if (!projectNameTrimmed) {
+      setTimesheetWorkerDeleteConfirm(null);
+      return;
+    }
+    setTimesheetWorkerDeleteBusy(true);
+    try {
+      const result = await deleteWorkerDayEntriesForMonthProjectAndCompanyGroup({
+        workerId,
+        projectNameTrimmed,
+        year: timesheetYear,
+        month1Based: timesheetMonth,
+        companyGroupIndex: gi,
+        workersCompanyByWorkerId,
+      });
+      if (!result.ok) {
+        window.alert(
+          `\uC0AD\uC81C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4: ${result.message}`
+        );
+        return;
+      }
+      await pullWorkerDayEntriesRemote("deps");
+    } finally {
+      setTimesheetWorkerDeleteBusy(false);
+      setTimesheetWorkerDeleteConfirm(null);
+    }
+  }, [
+    timesheetWorkerDeleteConfirm,
+    timesheetYear,
+    timesheetMonth,
+    activeProject,
+    activeTimesheetGrid.body,
+    workersCompanyByWorkerId,
+    pullWorkerDayEntriesRemote,
+  ]);
+
   useEffect(() => {
     if (!canShowProjectTimesheet) return;
     if (getSupabaseBrowserClient() == null) return;
@@ -1162,6 +1283,8 @@ export default function AdminMainScreen({
     setRenameDialog(null);
     setLayoutPasteConfirmOpen(false);
     setLayoutPasteConfirmClip(null);
+    setTimesheetWorkerNameMenu(null);
+    setTimesheetWorkerDeleteConfirm(null);
   }, [activeSheetKey]);
 
   useEffect(() => {
@@ -1197,6 +1320,20 @@ export default function AdminMainScreen({
   }, [projectContextMenu]);
 
   useEffect(() => {
+    if (timesheetWorkerNameMenu == null) return;
+    const onPointerDownCapture = (e: PointerEvent) => {
+      const t = e.target;
+      if (!(t instanceof Node)) return;
+      const menu = document.querySelector("[data-timesheet-worker-name-menu]");
+      if (menu?.contains(t)) return;
+      setTimesheetWorkerNameMenu(null);
+    };
+    document.addEventListener("pointerdown", onPointerDownCapture, true);
+    return () =>
+      document.removeEventListener("pointerdown", onPointerDownCapture, true);
+  }, [timesheetWorkerNameMenu]);
+
+  useEffect(() => {
     if (
       projectContextMenu == null &&
       renameDialog == null &&
@@ -1208,7 +1345,9 @@ export default function AdminMainScreen({
       accountListRowMenu == null &&
       deleteExtraConfirmIndex == null &&
       editingExtraAccountIndex == null &&
-      personnelDeleteConfirm == null
+      personnelDeleteConfirm == null &&
+      timesheetWorkerNameMenu == null &&
+      timesheetWorkerDeleteConfirm == null
     )
       return;
     const onKey = (e: KeyboardEvent) => {
@@ -1221,6 +1360,8 @@ export default function AdminMainScreen({
         setPersonnelEditDraft("");
         personnelEditDraftRef.current = "";
         setPersonnelDeleteConfirm(null);
+        setTimesheetWorkerNameMenu(null);
+        setTimesheetWorkerDeleteConfirm(null);
         setIdHeaderMenuOpen(false);
         setCreateAccountModalOpen(false);
         setCreateDraftId("");
@@ -1247,6 +1388,8 @@ export default function AdminMainScreen({
     deleteExtraConfirmIndex,
     editingExtraAccountIndex,
     personnelDeleteConfirm,
+    timesheetWorkerNameMenu,
+    timesheetWorkerDeleteConfirm,
   ]);
 
   const handleSaveRename = useCallback(
@@ -2095,6 +2238,8 @@ export default function AdminMainScreen({
     setEditExtraDraft({ id: "", password: "", user: "", role: "AMOUNT_ADMIN" });
     setDeleteExtraConfirmIndex(null);
     setPersonnelDeleteConfirm(null);
+    setTimesheetWorkerNameMenu(null);
+    setTimesheetWorkerDeleteConfirm(null);
   }, [mainView, selectedPersonnelGrade]);
 
   useEffect(() => {
@@ -3047,6 +3192,9 @@ export default function AdminMainScreen({
                             <button
                               type="button"
                               onClick={() => openWorkerRateDialog(wi)}
+                              onContextMenu={(e) => {
+                                openTimesheetWorkerNameContextMenu(e, wi);
+                              }}
                               className="box-border flex min-h-[1.75rem] w-full max-w-full cursor-pointer items-center justify-center px-1 py-1 text-center text-[10px] font-semibold leading-snug text-slate-900 underline decoration-slate-400 decoration-dotted underline-offset-2 hover:bg-teal-50 hover:text-teal-900 md:text-[11px] break-words"
                               aria-label={`${name} \uAE30\uC900\u00B7\uCC28\uC775 \uB2E8\uAC00 \uC124\uC815`}
                               title={"\uAE30\uC900\u00B7\uCC28\uC775 \uB2E8\uAC00 \uC124\uC815"}
@@ -3599,6 +3747,83 @@ export default function AdminMainScreen({
               >
                 {"\uC0AD\uC81C"}
               </button>
+            </div>,
+            document.body
+          )
+        : null}
+      {timesheetWorkerNameMenu != null
+        ? createPortal(
+            <div
+              data-timesheet-worker-name-menu
+              role="menu"
+              aria-label={"\uACF5\uC218\uD45C \uC791\uC5C5\uC790 \uBA54\uB274"}
+              className="fixed z-[210] min-w-[6rem] overflow-hidden rounded-md border border-slate-300 bg-white py-0.5 shadow-lg"
+              style={{
+                left: timesheetWorkerNameMenu.left,
+                top: timesheetWorkerNameMenu.top,
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full px-3 py-1.5 text-left text-xs font-medium text-red-700 hover:bg-red-50 md:text-sm"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => requestTimesheetWorkerMonthRecordDelete()}
+              >
+                {"\uAE30\uB85D \uC0AD\uC81C"}
+              </button>
+            </div>,
+            document.body
+          )
+        : null}
+      {timesheetWorkerDeleteConfirm != null
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[220] flex items-center justify-center bg-black/35 p-4"
+              role="presentation"
+              onPointerDown={(e) => {
+                if (e.target === e.currentTarget && !timesheetWorkerDeleteBusy) {
+                  cancelTimesheetWorkerMonthRecordDelete();
+                }
+              }}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="ts-worker-del-title"
+                className="w-full max-w-sm rounded-lg border border-slate-300 bg-white p-4 shadow-xl"
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <p
+                  id="ts-worker-del-title"
+                  className="text-sm font-semibold text-slate-900"
+                >
+                  {
+                    "\uD574\uB2F9 \uC791\uC5C5\uC790\uC758 \uC120\uD0DD \uC6D4 \uACF5\uC218 \uAE30\uB85D\uC744 \uC0AD\uC81C\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?"
+                  }
+                </p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={timesheetWorkerDeleteBusy}
+                    onClick={() => cancelTimesheetWorkerMonthRecordDelete()}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 md:text-sm"
+                  >
+                    {"\uC544\uB2C8\uC624"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={timesheetWorkerDeleteBusy}
+                    onClick={() => void confirmTimesheetWorkerMonthRecordDelete()}
+                    className="rounded-md border border-red-600 bg-red-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40 md:text-sm"
+                  >
+                    {timesheetWorkerDeleteBusy
+                      ? "\uCC98\uB9AC \uC911\u2026"
+                      : "\uC608"}
+                  </button>
+                </div>
+              </div>
             </div>,
             document.body
           )
