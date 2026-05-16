@@ -69,9 +69,22 @@ export type MonthlyPayrollRow = {
   phoneLast4: string;
   displayName: string;
   company: string;
+  /** Supabase workers.phone */
+  phone: string;
   totalEffort: number;
+  /** 세전급여(실급여 합계) */
   totalNetPay: number | null;
 };
+
+/** 세후급여 = 세전급여 × 0.967 (원 단위 정수) */
+export const MONTHLY_PAYROLL_POST_TAX_FACTOR = 0.967;
+
+export function computeMonthlyPayrollPostTax(
+  preTax: number | null
+): number | null {
+  if (preTax == null || !Number.isFinite(preTax)) return null;
+  return Math.round(preTax * MONTHLY_PAYROLL_POST_TAX_FACTOR);
+}
 
 const PROJ_WORKER_SEP = "\u001f";
 
@@ -171,6 +184,7 @@ export function computeMonthlyPayrollRowsFromServerEntries(
     const baseName = (remote?.worker_name ?? acc.baseName).trim();
     const phoneLast4 = wid ? phoneLast4FromWorkerId(wid) : "";
     const company = (remote?.company_name ?? "").trim();
+    const phone = (remote?.phone ?? "").trim();
     rows.push({
       workerKey: key,
       workerId: wid,
@@ -178,6 +192,7 @@ export function computeMonthlyPayrollRowsFromServerEntries(
       phoneLast4,
       displayName: baseName,
       company,
+      phone,
       totalEffort: acc.totalEffort,
       totalNetPay: acc.totalNetPay,
     });

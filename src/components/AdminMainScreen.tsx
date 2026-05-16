@@ -65,6 +65,7 @@ import {
   loadMonthlyPayrollData,
   type MonthlyPayrollRow,
 } from "../lib/loadMonthlyPayrollData";
+import { computeMonthlyPayrollPostTax } from "../lib/monthlyPayrollAggregate";
 import {
   TIMESHEET_COMPANY_GROUP_NAMES,
   companyWorkerSlotRanges,
@@ -3258,20 +3259,32 @@ export default function AdminMainScreen({
                 </button>
               </div>
               <div className="overflow-x-auto rounded border border-slate-300 bg-white shadow-sm">
-                <table className="w-full min-w-[36rem] table-fixed border-collapse border border-slate-400 text-[11px] md:text-sm">
+                <table className="w-full min-w-[64rem] table-fixed border-collapse border border-slate-400 text-[11px] md:text-sm">
                   <thead>
                     <tr className="bg-slate-200">
-                      <th className="w-[18%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
                         {"\uC18C\uC18D"}
                       </th>
-                      <th className="w-[22%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
                         {"\uC774\uB984"}
                       </th>
-                      <th className="w-[20%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        {"\uC804\uD654\uBC88\uD638"}
+                      </th>
+                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        {"\uC8FC\uBBFC\uBC88\uD638"}
+                      </th>
+                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        {"\uC138\uC804\uAE09\uC5EC"}
+                      </th>
+                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        {"\uC138\uD6C4\uAE09\uC5EC"}
+                      </th>
+                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
                         {"\uCD1D\uACF5\uC218"}
                       </th>
-                      <th className="w-[40%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
-                        {FOOTER_LABELS[2]}
+                      <th className="border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        {"\uACC4\uC88C\uBC88\uD638"}
                       </th>
                     </tr>
                   </thead>
@@ -3279,7 +3292,7 @@ export default function AdminMainScreen({
                     {timesheetYear == null || timesheetMonth == null ? (
                       <tr>
                         <td
-                          colSpan={4}
+                          colSpan={8}
                           className="border border-slate-400 px-3 py-6 text-center text-slate-600"
                         >
                           {
@@ -3290,7 +3303,7 @@ export default function AdminMainScreen({
                     ) : payrollRemoteFetchBusy ? (
                       <tr>
                         <td
-                          colSpan={4}
+                          colSpan={8}
                           className="border border-slate-400 px-3 py-6 text-center text-slate-600"
                         >
                           {
@@ -3301,7 +3314,7 @@ export default function AdminMainScreen({
                     ) : payrollRemoteFetchError != null ? (
                       <tr>
                         <td
-                          colSpan={4}
+                          colSpan={8}
                           className="border border-slate-400 px-3 py-6 text-center text-red-700"
                         >
                           {payrollRemoteFetchError === "not_configured"
@@ -3312,7 +3325,7 @@ export default function AdminMainScreen({
                     ) : monthlyPayrollRows.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={4}
+                          colSpan={8}
                           className="border border-slate-400 px-3 py-6 text-center text-slate-600"
                         >
                           {
@@ -3321,34 +3334,62 @@ export default function AdminMainScreen({
                         </td>
                       </tr>
                     ) : (
-                      monthlyPayrollRows.map((row) => (
-                        <tr
-                          key={row.workerKey}
-                          className="bg-white even:bg-slate-50/80"
-                        >
-                          <td className="border border-slate-400 px-2 py-1.5 align-middle text-slate-800">
-                            {row.company !== "" ? row.company : "\u00A0"}
-                          </td>
-                          <td className="border border-slate-400 px-2 py-1.5 align-middle font-medium text-slate-900">
-                            {row.displayName}
-                          </td>
-                          <td className="border border-slate-400 px-2 py-1.5 text-right align-middle tabular-nums text-slate-800">
-                            {formatEffortFooterTotal(row.totalEffort) || "0"}
-                          </td>
-                          <td className="border border-slate-400 px-2 py-1.5 text-right align-middle tabular-nums text-slate-800">
-                            {showAmountRows ? (
-                              row.totalNetPay != null &&
-                              Number.isFinite(row.totalNetPay) ? (
-                                formatMoneyAmount(row.totalNetPay)
+                      monthlyPayrollRows.map((row) => {
+                        const preTax = row.totalNetPay;
+                        const postTax = computeMonthlyPayrollPostTax(preTax);
+                        const phoneDigits = digitsOnly(row.phone);
+                        const phoneDisplay =
+                          phoneDigits !== ""
+                            ? formatKoreanPhoneDisplay(phoneDigits)
+                            : "";
+                        return (
+                          <tr
+                            key={row.workerKey}
+                            className="bg-white even:bg-slate-50/80"
+                          >
+                            <td className="border border-slate-400 px-2 py-1.5 align-middle text-slate-800">
+                              {row.company !== "" ? row.company : "\u00A0"}
+                            </td>
+                            <td className="border border-slate-400 px-2 py-1.5 align-middle font-medium text-slate-900">
+                              {row.displayName}
+                            </td>
+                            <td className="border border-slate-400 px-2 py-1.5 align-middle tabular-nums text-slate-800">
+                              {phoneDisplay !== "" ? phoneDisplay : "\u00A0"}
+                            </td>
+                            <td className="border border-slate-400 px-2 py-1.5 align-middle text-slate-800">
+                              {"\u00A0"}
+                            </td>
+                            <td className="border border-slate-400 px-2 py-1.5 text-right align-middle tabular-nums text-slate-800">
+                              {showAmountRows ? (
+                                preTax != null && Number.isFinite(preTax) ? (
+                                  formatMoneyAmount(preTax)
+                                ) : (
+                                  "\u2014"
+                                )
                               ) : (
-                                "\u2014"
-                              )
-                            ) : (
-                              MONEY_FOOTER_MASK
-                            )}
-                          </td>
-                        </tr>
-                      ))
+                                MONEY_FOOTER_MASK
+                              )}
+                            </td>
+                            <td className="border border-slate-400 px-2 py-1.5 text-right align-middle tabular-nums text-slate-800">
+                              {showAmountRows ? (
+                                postTax != null && Number.isFinite(postTax) ? (
+                                  formatMoneyAmount(postTax)
+                                ) : (
+                                  "\u2014"
+                                )
+                              ) : (
+                                MONEY_FOOTER_MASK
+                              )}
+                            </td>
+                            <td className="border border-slate-400 px-2 py-1.5 text-right align-middle tabular-nums text-slate-800">
+                              {formatEffortFooterTotal(row.totalEffort) || "0"}
+                            </td>
+                            <td className="border border-slate-400 px-2 py-1.5 align-middle text-slate-800">
+                              {"\u00A0"}
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
