@@ -80,7 +80,6 @@ import {
 } from "../lib/workerProjectRatesFromSupabase";
 import {
   MASTER_ADMIN_ID,
-  MASTER_ADMIN_PASSWORD,
   normalizeAdminAccountId,
 } from "../auth/masterCredentials";
 import {
@@ -1787,7 +1786,7 @@ export default function AdminMainScreen({
   }, []);
 
   const submitSummaryLnUnlock = useCallback(() => {
-    if (summaryLnUnlockPassword.trim() === MASTER_ADMIN_PASSWORD) {
+    if (verifyAdminLoginPassword(loggedInUserId, summaryLnUnlockPassword)) {
       setSummaryLnUnmasked(true);
       closeSummaryLnUnlockDialog();
       return;
@@ -1795,7 +1794,11 @@ export default function AdminMainScreen({
     setSummaryLnUnlockError(
       "\uBE44\uBC00\uBC88\uD638\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
     );
-  }, [summaryLnUnlockPassword, closeSummaryLnUnlockDialog]);
+  }, [
+    loggedInUserId,
+    summaryLnUnlockPassword,
+    closeSummaryLnUnlockDialog,
+  ]);
 
   const handleSaveWorkerRateDialog = useCallback(async () => {
     if (workerRateDialogTarget == null || workerRateSaveBusy) return;
@@ -4092,7 +4095,7 @@ export default function AdminMainScreen({
                 </h3>
                 <p className="mt-1 text-xs text-slate-600">
                   {
-                    "\uB9C8\uC2A4\uD130 \uBE44\uBC00\uBC88\uD638\uB97C \uC785\uB825\uD558\uC138\uC694."
+                    "\uB85C\uADF8\uC778\uD55C \uACC4\uC815\uC758 \uBE44\uBC00\uBC88\uD638\uB97C \uC785\uB825\uD558\uC138\uC694."
                   }
                 </p>
                 <label className="mt-3 block text-xs font-medium text-slate-700">
