@@ -80,6 +80,7 @@ import {
 } from "../lib/workerProjectRatesFromSupabase";
 import {
   MASTER_ADMIN_ID,
+  MASTER_ADMIN_PASSWORD,
   normalizeAdminAccountId,
 } from "../auth/masterCredentials";
 import {
@@ -262,6 +263,13 @@ function formatFooterComputedMoneyDisplay(
     return MONEY_FOOTER_MASK;
   }
   return formatFooterComputedMoney(value);
+}
+
+/** 전체(월 요약) 화면 L&N 열 표시 */
+function formatSummaryLnMoney(value: number | null, unmasked: boolean): string {
+  if (value == null || !Number.isFinite(value)) return "-";
+  if (!unmasked) return MONEY_FOOTER_MASK;
+  return formatMoneyAmount(value);
 }
 
 function sumFiniteNumbers(values: readonly number[]): number {
@@ -626,6 +634,14 @@ export default function AdminMainScreen({
     null
   );
   const lnMoneyUnlockInputRef = useRef<HTMLInputElement>(null);
+  /** 전체 화면 L&N 마스킹 해제(세션만, localStorage 미저장) */
+  const [summaryLnUnmasked, setSummaryLnUnmasked] = useState(false);
+  const [summaryLnUnlockOpen, setSummaryLnUnlockOpen] = useState(false);
+  const [summaryLnUnlockPassword, setSummaryLnUnlockPassword] = useState("");
+  const [summaryLnUnlockError, setSummaryLnUnlockError] = useState<
+    string | null
+  >(null);
+  const summaryLnUnlockInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const workerRateBaseInputRef = useRef<HTMLInputElement>(null);
   const personnelEditInputRef = useRef<HTMLInputElement>(null);
@@ -1758,6 +1774,29 @@ export default function AdminMainScreen({
     openLnMoneyUnlockDialog();
   }, [moneyFooterUnmasked, openLnMoneyUnlockDialog]);
 
+  const openSummaryLnUnlockDialog = useCallback(() => {
+    setSummaryLnUnlockPassword("");
+    setSummaryLnUnlockError(null);
+    setSummaryLnUnlockOpen(true);
+  }, []);
+
+  const closeSummaryLnUnlockDialog = useCallback(() => {
+    setSummaryLnUnlockOpen(false);
+    setSummaryLnUnlockPassword("");
+    setSummaryLnUnlockError(null);
+  }, []);
+
+  const submitSummaryLnUnlock = useCallback(() => {
+    if (summaryLnUnlockPassword.trim() === MASTER_ADMIN_PASSWORD) {
+      setSummaryLnUnmasked(true);
+      closeSummaryLnUnlockDialog();
+      return;
+    }
+    setSummaryLnUnlockError(
+      "\uBE44\uBC00\uBC88\uD638\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
+    );
+  }, [summaryLnUnlockPassword, closeSummaryLnUnlockDialog]);
+
   const handleSaveWorkerRateDialog = useCallback(async () => {
     if (workerRateDialogTarget == null || workerRateSaveBusy) return;
     const base = parseRateInputValue(workerRateDraft.baseInput);
@@ -2460,6 +2499,14 @@ export default function AdminMainScreen({
     }, 0);
     return () => window.clearTimeout(t);
   }, [lnMoneyUnlockOpen]);
+
+  useEffect(() => {
+    if (!summaryLnUnlockOpen) return;
+    const t = window.setTimeout(() => {
+      summaryLnUnlockInputRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [summaryLnUnlockOpen]);
 
   useEffect(() => {
     if (!personnelMenuOpen) return;
@@ -3790,8 +3837,29 @@ export default function AdminMainScreen({
                       {"\uACF5\uC218"}
                     </th>
                     {showAmountRows ? (
-                      <th className="border border-slate-300 px-2.5 py-2 text-right text-[11px] font-bold text-slate-800 md:text-xs">
-                        L&N
+                      <th className="border border-slate-300 px-2 py-2 text-right text-[11px] font-bold text-slate-800 md:text-xs">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span>L&N</span>
+                          {summaryLnUnmasked ? (
+                            <button
+                              type="button"
+                              onClick={() => setSummaryLnUnmasked(false)}
+                              className="shrink-0 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-700 hover:bg-slate-50 md:text-[11px]"
+                              aria-label={"\uC804\uCCB4 \uD654\uBA74 L&N \uAE08\uC561 \uC228\uAE30"}
+                            >
+                              {"\uC228\uAE30"}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={openSummaryLnUnlockDialog}
+                              className="shrink-0 rounded border border-teal-600 bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800 hover:bg-teal-100 md:text-[11px]"
+                              aria-label={"\uC804\uCCB4 \uD654\uBA74 L&N \uAE08\uC561 \uBCF4\uAE30"}
+                            >
+                              {"\uBCF4\uAE30"}
+                            </button>
+                          )}
+                        </div>
                       </th>
                     ) : null}
                   </tr>
@@ -3827,9 +3895,10 @@ export default function AdminMainScreen({
                         </td>
                         {showAmountRows ? (
                           <td className="border border-slate-300 px-2.5 py-1.5 text-right tabular-nums text-slate-700">
-                            {row.profitLn == null
-                              ? "-"
-                              : formatMoneyAmount(row.profitLn)}
+                            {formatSummaryLnMoney(
+                              row.profitLn,
+                              summaryLnUnmasked
+                            )}
                           </td>
                         ) : null}
                       </tr>
@@ -3852,7 +3921,10 @@ export default function AdminMainScreen({
                       </td>
                       {showAmountRows ? (
                         <td className="border border-t-2 border-slate-300 border-t-slate-400 px-2.5 py-1.5 text-right tabular-nums">
-                          {formatMoneyAmount(monthSummaryGrandTotals.profitLn)}
+                          {formatSummaryLnMoney(
+                            monthSummaryGrandTotals.profitLn,
+                            summaryLnUnmasked
+                          )}
                         </td>
                       ) : null}
                     </tr>
@@ -3983,6 +4055,85 @@ export default function AdminMainScreen({
                   <button
                     type="button"
                     onClick={submitLnMoneyUnlock}
+                    className="rounded-md border border-teal-600 bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 md:text-sm"
+                  >
+                    {"\uC5F4\uAE30"}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+      {showAmountRows && summaryLnUnlockOpen
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[416] flex items-center justify-center bg-black/35 p-4"
+              role="presentation"
+              onPointerDown={(e) => {
+                if (e.target === e.currentTarget) closeSummaryLnUnlockDialog();
+              }}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="summary-ln-unlock-title"
+                className="w-full max-w-sm rounded-lg border border-slate-300 bg-white p-4 shadow-xl"
+                onPointerDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") closeSummaryLnUnlockDialog();
+                }}
+              >
+                <h3
+                  id="summary-ln-unlock-title"
+                  className="text-sm font-bold text-slate-900"
+                >
+                  {"\uC804\uCCB4 \uD654\uBA74 L&N \uAE08\uC561 \uBCF4\uAE30"}
+                </h3>
+                <p className="mt-1 text-xs text-slate-600">
+                  {
+                    "\uB9C8\uC2A4\uD130 \uBE44\uBC00\uBC88\uD638\uB97C \uC785\uB825\uD558\uC138\uC694."
+                  }
+                </p>
+                <label className="mt-3 block text-xs font-medium text-slate-700">
+                  {"\uBE44\uBC00\uBC88\uD638"}
+                  <input
+                    ref={summaryLnUnlockInputRef}
+                    type="password"
+                    autoComplete="current-password"
+                    value={summaryLnUnlockPassword}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                      setSummaryLnUnlockPassword(e.target.value);
+                      if (summaryLnUnlockError != null) {
+                        setSummaryLnUnlockError(null);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        submitSummaryLnUnlock();
+                      }
+                    }}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    aria-label={"\uBE44\uBC00\uBC88\uD638"}
+                  />
+                </label>
+                {summaryLnUnlockError != null ? (
+                  <p className="mt-2 text-xs text-red-600" role="alert">
+                    {summaryLnUnlockError}
+                  </p>
+                ) : null}
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeSummaryLnUnlockDialog}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50 md:text-sm"
+                  >
+                    {"\uCDE8\uC18C"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitSummaryLnUnlock}
                     className="rounded-md border border-teal-600 bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 md:text-sm"
                   >
                     {"\uC5F4\uAE30"}
