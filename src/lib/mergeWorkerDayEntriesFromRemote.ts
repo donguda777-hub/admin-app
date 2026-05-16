@@ -23,6 +23,10 @@ export type WorkerDayEntryRemoteRow = {
   work_hours?: number | string | null;
   memo?: string | null;
   deleted_at?: string | null;
+  /** 기준 단가(원), 서버 `base_rate` */
+  base_rate?: number | string | null;
+  /** 차익 단가(원), 서버 `profit_rate` */
+  profit_rate?: number | string | null;
 };
 
 export function monthDateRangeForRemoteWorkerEntries(

@@ -1,6 +1,7 @@
 import type { WorkerDayEntryRemoteRow } from "./mergeWorkerDayEntriesFromRemote";
 import { monthDateRangeForRemoteWorkerEntries } from "./mergeWorkerDayEntriesFromRemote";
 import { getSupabaseBrowserClient } from "./supabaseClient";
+import { WORKER_DAY_ENTRY_SELECT_COLUMNS } from "./workerDayEntrySelectColumns";
 
 export type FetchWorkerDayEntriesForMonthResult = {
   rows: WorkerDayEntryRemoteRow[];
@@ -31,9 +32,7 @@ export async function fetchWorkerDayEntriesForMonth(
       const to = from + pageSize - 1;
       const { data, error } = await supabase
         .from("worker_day_entries")
-        .select(
-          "id, worker_id, worker_name, company_name, project_id, project_name, work_date, work_hours, memo, deleted_at"
-        )
+        .select(WORKER_DAY_ENTRY_SELECT_COLUMNS)
         .gte("work_date", start)
         .lte("work_date", end)
         .is("deleted_at", null)

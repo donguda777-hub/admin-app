@@ -70,6 +70,14 @@ import {
   companyWorkerSlotRanges,
 } from "../lib/timesheetCompanyGroups";
 import { getSupabaseBrowserClient } from "../lib/supabaseClient";
+import { WORKER_DAY_ENTRY_SELECT_COLUMNS } from "../lib/workerDayEntrySelectColumns";
+import {
+  fetchWorkerProjectRatesForMonth,
+  ingestProjectWorkerRatesFromRows,
+  projectWorkerRateStorageKey,
+  stripProjectWorkerRateKeysForProject,
+  updateWorkerProjectRatesForMonth,
+} from "../lib/workerProjectRatesFromSupabase";
 import {
   MASTER_ADMIN_ID,
   normalizeAdminAccountId,
@@ -314,6 +322,33 @@ function computeWorkerLnTotalsForSummary(
   return out;
 }
 
+function resolveWorkerRatesForProjectSlot(
+  workerIndex: number,
+  body: Record<string, string>,
+  workerRatesByKey: Record<string, WorkerRatePersist>,
+  grid: TimesheetGridPersisted,
+  projectId: string | null,
+  projectWorkerRatesByKey: Record<string, WorkerRatePersist>
+): WorkerRatePersist {
+  const workerId = (body[timesheetWorkerIdCellKey(workerIndex)] ?? "").trim();
+  if (projectId != null && projectId.trim() !== "" && workerId !== "") {
+    const k = projectWorkerRateStorageKey(projectId, workerId);
+    const pr = projectWorkerRatesByKey[k];
+    if (pr != null && (pr.base != null || pr.spread != null)) {
+      return {
+        base: pr.base ?? null,
+        spread: pr.spread ?? null,
+      };
+    }
+  }
+  return resolveWorkerRatesForSlot(
+    workerIndex,
+    body,
+    workerRatesByKey,
+    grid
+  );
+}
+
 function countNamedWorkerSlots(
   body: Record<string, string>,
   slotCount: number
@@ -329,7 +364,9 @@ function computeProjectTimesheetSummary(
   grid: TimesheetGridPersisted,
   dayList: readonly { day: number }[],
   slotCount: number,
-  workerRatesByKey: Record<string, WorkerRatePersist>
+  workerRatesByKey: Record<string, WorkerRatePersist>,
+  projectId: string | null,
+  projectWorkerRatesByKey: Record<string, WorkerRatePersist>
 ): { headcount: number; effort: number; profitLn: number | null } {
   const body = grid.body;
   const headcount = countNamedWorkerSlots(body, slotCount);
@@ -340,7 +377,14 @@ function computeProjectTimesheetSummary(
   );
   const effort = effortArr.reduce((a, v) => a + v, 0);
   const spreadPerSlot = Array.from({ length: slotCount }, (_, wi) =>
-    resolveWorkerRatesForSlot(wi, body, workerRatesByKey, grid).spread
+    resolveWorkerRatesForProjectSlot(
+      wi,
+      body,
+      workerRatesByKey,
+      grid,
+      projectId,
+      projectWorkerRatesByKey
+    ).spread
   );
   const lnArr = computeWorkerLnTotalsForSummary(
     spreadPerSlot,
@@ -550,12 +594,24 @@ export default function AdminMainScreen({
   const [workerRatesByKey, setWorkerRatesByKey] = useState<
     Record<string, WorkerRatePersist>
   >(() => readPersist().workerRatesByKey ?? {});
+  /**
+   * 프로젝트+작업자별 기준/차익 (Supabase worker_day_entries.base_rate/profit_rate에서만 채움).
+   * 공수표 그리드 persist와 별개.
+   */
+  const [projectWorkerRatesByKey, setProjectWorkerRatesByKey] = useState<
+    Record<string, WorkerRatePersist>
+  >({});
   /** ???? ????? ??????????????????). ??????? workerRateDraft???? ?????. */
   const [workerRateDialogTarget, setWorkerRateDialogTarget] = useState<{
     workerIndex: number;
     workerName: string;
     workerId: string;
+    projectId: string | null;
   } | null>(null);
+  const [workerRateDialogFetchBusy, setWorkerRateDialogFetchBusy] =
+    useState(false);
+  const [workerRateSaveBusy, setWorkerRateSaveBusy] = useState(false);
+  const workerRateDialogSeqRef = useRef(0);
   const [workerRateDraft, setWorkerRateDraft] = useState({
     baseInput: "",
     spreadInput: "",
@@ -869,9 +925,7 @@ export default function AdminMainScreen({
         }
         const { data, error } = await supabase
           .from("worker_day_entries")
-          .select(
-            "id, worker_id, worker_name, company_name, project_id, project_name, work_date, work_hours, memo, deleted_at"
-          )
+          .select(WORKER_DAY_ENTRY_SELECT_COLUMNS)
           .gte("work_date", start)
           .lte("work_date", end)
           .is("deleted_at", null);
@@ -937,6 +991,14 @@ export default function AdminMainScreen({
               ),
             };
           }
+        });
+        if (workerDayRemoteSyncGenRef.current !== genAtStart) return;
+        const pid = String(selectedProjectId).trim();
+        setProjectWorkerRatesByKey((prev) => {
+          if (workerDayRemoteSyncGenRef.current !== genAtStart) return prev;
+          const stripped = stripProjectWorkerRateKeysForProject(prev, pid);
+          const chunk = ingestProjectWorkerRatesFromRows(pid, rows);
+          return { ...stripped, ...chunk };
         });
         if (workerDayRemoteSyncGenRef.current === genAtStart && source === "deps") {
           console.log("[Supabase] worker_day_entries select ok", {
@@ -1132,7 +1194,9 @@ export default function AdminMainScreen({
         grid,
         days,
         WORKER_SLOT_COUNT,
-        workerRatesByKey
+        workerRatesByKey,
+        p.id,
+        projectWorkerRatesByKey
       );
       return { projectId: p.id, name: p.name, ...s };
     });
@@ -1144,6 +1208,7 @@ export default function AdminMainScreen({
     timesheetGrids,
     days,
     workerRatesByKey,
+    projectWorkerRatesByKey,
   ]);
 
   const monthSummaryGrandTotals = useMemo(() => {
@@ -1182,11 +1247,13 @@ export default function AdminMainScreen({
     const body = activeTimesheetGrid.body;
     const out: (number | null)[] = new Array(WORKER_SLOT_COUNT).fill(null);
     for (let wi = 0; wi < WORKER_SLOT_COUNT; wi++) {
-      const { base } = resolveWorkerRatesForSlot(
+      const { base } = resolveWorkerRatesForProjectSlot(
         wi,
         body,
         workerRatesByKey,
-        activeTimesheetGrid
+        activeTimesheetGrid,
+        selectedProjectId,
+        projectWorkerRatesByKey
       );
       const effort = workerEffortTotals[wi] ?? 0;
       if (base == null || !Number.isFinite(base)) {
@@ -1196,17 +1263,25 @@ export default function AdminMainScreen({
       out[wi] = Math.round(base * effort);
     }
     return out;
-  }, [activeTimesheetGrid, workerEffortTotals, workerRatesByKey]);
+  }, [
+    activeTimesheetGrid,
+    workerEffortTotals,
+    workerRatesByKey,
+    selectedProjectId,
+    projectWorkerRatesByKey,
+  ]);
 
   const workerNetPayTotals = useMemo((): (number | null)[] => {
     const body = activeTimesheetGrid.body;
     const out: (number | null)[] = new Array(WORKER_SLOT_COUNT).fill(null);
     for (let wi = 0; wi < WORKER_SLOT_COUNT; wi++) {
-      const { base, spread } = resolveWorkerRatesForSlot(
+      const { base, spread } = resolveWorkerRatesForProjectSlot(
         wi,
         body,
         workerRatesByKey,
-        activeTimesheetGrid
+        activeTimesheetGrid,
+        selectedProjectId,
+        projectWorkerRatesByKey
       );
       const effort = workerEffortTotals[wi] ?? 0;
       if (
@@ -1221,17 +1296,25 @@ export default function AdminMainScreen({
       out[wi] = Math.round((base - spread) * effort);
     }
     return out;
-  }, [activeTimesheetGrid, workerEffortTotals, workerRatesByKey]);
+  }, [
+    activeTimesheetGrid,
+    workerEffortTotals,
+    workerRatesByKey,
+    selectedProjectId,
+    projectWorkerRatesByKey,
+  ]);
 
   const workerLnTotals = useMemo((): (number | null)[] => {
     const body = activeTimesheetGrid.body;
     const out: (number | null)[] = new Array(WORKER_SLOT_COUNT).fill(null);
     for (let wi = 0; wi < WORKER_SLOT_COUNT; wi++) {
-      const { spread } = resolveWorkerRatesForSlot(
+      const { spread } = resolveWorkerRatesForProjectSlot(
         wi,
         body,
         workerRatesByKey,
-        activeTimesheetGrid
+        activeTimesheetGrid,
+        selectedProjectId,
+        projectWorkerRatesByKey
       );
       const effort = workerEffortTotals[wi] ?? 0;
       if (spread == null || !Number.isFinite(spread)) {
@@ -1241,7 +1324,13 @@ export default function AdminMainScreen({
       out[wi] = Math.round(spread * effort);
     }
     return out;
-  }, [activeTimesheetGrid, workerEffortTotals, workerRatesByKey]);
+  }, [
+    activeTimesheetGrid,
+    workerEffortTotals,
+    workerRatesByKey,
+    selectedProjectId,
+    projectWorkerRatesByKey,
+  ]);
 
   const salaryFooterGrandTotal = useMemo((): number | null => {
     const parts = workerSalaryTotals.filter(
@@ -1544,27 +1633,71 @@ export default function AdminMainScreen({
       const workerId = (
         activeTimesheetGrid.body[timesheetWorkerIdCellKey(workerIndex)] ?? ""
       ).trim();
-      const { base, spread } = resolveWorkerRatesForSlot(
-        workerIndex,
-        activeTimesheetGrid.body,
-        workerRatesByKey,
-        activeTimesheetGrid
-      );
+      const projectId = activeProject?.id ?? null;
+      const seq = ++workerRateDialogSeqRef.current;
       setWorkerRateDialogTarget({
         workerIndex,
         workerName: name,
         workerId,
+        projectId,
       });
-      setWorkerRateDraft({
-        baseInput: formatRateInputValue(base),
-        spreadInput: formatRateInputValue(spread),
-      });
+      setWorkerRateDialogFetchBusy(true);
+      setWorkerRateDraft({ baseInput: "", spreadInput: "" });
+
+      void (async () => {
+        let serverBase: number | null = null;
+        let serverSpread: number | null = null;
+        if (
+          projectId != null &&
+          projectId.trim() !== "" &&
+          workerId !== "" &&
+          timesheetYear != null &&
+          timesheetMonth != null
+        ) {
+          const r = await fetchWorkerProjectRatesForMonth({
+            projectId,
+            workerId,
+            year: timesheetYear,
+            month1Based: timesheetMonth,
+          });
+          if (workerRateDialogSeqRef.current !== seq) return;
+          if (r.error != null && r.error !== "not_configured") {
+            console.error("[Supabase] worker rate dialog fetch failed", r.error);
+          }
+          serverBase = r.base;
+          serverSpread = r.spread;
+        }
+        if (workerRateDialogSeqRef.current !== seq) return;
+        const fallback = resolveWorkerRatesForProjectSlot(
+          workerIndex,
+          activeTimesheetGrid.body,
+          workerRatesByKey,
+          activeTimesheetGrid,
+          selectedProjectId,
+          projectWorkerRatesByKey
+        );
+        setWorkerRateDraft({
+          baseInput: formatRateInputValue(serverBase ?? fallback.base),
+          spreadInput: formatRateInputValue(serverSpread ?? fallback.spread),
+        });
+        setWorkerRateDialogFetchBusy(false);
+      })();
     },
-    [activeTimesheetGrid, workerRatesByKey]
+    [
+      activeTimesheetGrid,
+      workerRatesByKey,
+      activeProject,
+      timesheetYear,
+      timesheetMonth,
+      selectedProjectId,
+      projectWorkerRatesByKey,
+    ]
   );
 
   const closeWorkerRateDialog = useCallback(() => {
+    workerRateDialogSeqRef.current += 1;
     setWorkerRateDialogTarget(null);
+    setWorkerRateDialogFetchBusy(false);
   }, []);
 
   const openLnMoneyUnlockDialog = useCallback(() => {
@@ -1602,20 +1735,79 @@ export default function AdminMainScreen({
     openLnMoneyUnlockDialog();
   }, [moneyFooterUnmasked, openLnMoneyUnlockDialog]);
 
-  const handleSaveWorkerRateDialog = useCallback(() => {
-    if (workerRateDialogTarget == null) return;
+  const handleSaveWorkerRateDialog = useCallback(async () => {
+    if (workerRateDialogTarget == null || workerRateSaveBusy) return;
     const base = parseRateInputValue(workerRateDraft.baseInput);
     const spread = parseRateInputValue(workerRateDraft.spreadInput);
-    const key = workerRateStorageKey(
-      workerRateDialogTarget.workerId,
-      workerRateDialogTarget.workerName
-    );
+    const { workerId, workerName, projectId } = workerRateDialogTarget;
+
+    const canServer =
+      projectId != null &&
+      projectId.trim() !== "" &&
+      workerId.trim() !== "" &&
+      timesheetYear != null &&
+      timesheetMonth != null &&
+      getSupabaseBrowserClient() != null;
+
+    if (canServer) {
+      setWorkerRateSaveBusy(true);
+      try {
+        const res = await updateWorkerProjectRatesForMonth({
+          projectId: projectId!,
+          workerId: workerId.trim(),
+          year: timesheetYear!,
+          month1Based: timesheetMonth!,
+          base,
+          spread,
+        });
+        if (!res.ok) {
+          window.alert(
+            `\uC800\uC7A5\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4: ${res.message}`
+          );
+          return;
+        }
+        if (res.updatedRowCount === 0) {
+          window.alert(
+            "\uD574\uB2F9 \uC6D4\uC5D0 \uACF5\uC218 \uAE30\uB85D\uC774 \uC788\uB294 \uD589\uC774 \uC5C6\uC5B4 \uC11C\uBC84\uC5D0 \uBC18\uC601\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4. \uACF5\uC218\uB97C \uC785\uB825\uD55C \uD6C4 \uB2E4\uC2DC \uC800\uC7A5\uD558\uC138\uC694."
+          );
+          const key = workerRateStorageKey(workerId, workerName);
+          setWorkerRatesByKey((prev) => ({
+            ...prev,
+            [key]: { base, spread },
+          }));
+          workerRateDialogSeqRef.current += 1;
+          setWorkerRateDialogTarget(null);
+          return;
+        }
+        const rateKey = projectWorkerRateStorageKey(projectId!, workerId.trim());
+        setProjectWorkerRatesByKey((prev) => ({
+          ...prev,
+          [rateKey]: { base, spread },
+        }));
+        await pullWorkerDayEntriesRemote("deps");
+        workerRateDialogSeqRef.current += 1;
+        setWorkerRateDialogTarget(null);
+      } finally {
+        setWorkerRateSaveBusy(false);
+      }
+      return;
+    }
+
+    const key = workerRateStorageKey(workerId, workerName);
     setWorkerRatesByKey((prev) => ({
       ...prev,
       [key]: { base, spread },
     }));
+    workerRateDialogSeqRef.current += 1;
     setWorkerRateDialogTarget(null);
-  }, [workerRateDialogTarget, workerRateDraft]);
+  }, [
+    workerRateDialogTarget,
+    workerRateSaveBusy,
+    workerRateDraft,
+    timesheetYear,
+    timesheetMonth,
+    pullWorkerDayEntriesRemote,
+  ]);
 
   const handleAddProject = useCallback(async () => {
     if (timesheetYear == null || timesheetMonth == null) {
@@ -1673,11 +1865,13 @@ export default function AdminMainScreen({
       grid.body[timesheetWorkerNameCellKey(wi)] ?? ""
     );
     const workerRates = Array.from({ length: WORKER_SLOT_COUNT }, (_, wi) => {
-      const { base, spread } = resolveWorkerRatesForSlot(
+      const { base, spread } = resolveWorkerRatesForProjectSlot(
         wi,
         grid.body,
         workerRatesByKey,
-        grid
+        grid,
+        selectedProjectId,
+        projectWorkerRatesByKey
       );
       return { base, spread };
     });
@@ -1717,6 +1911,7 @@ export default function AdminMainScreen({
     selectedProjectId,
     projects,
     workerRatesByKey,
+    projectWorkerRatesByKey,
   ]);
 
   const openLayoutPasteConfirm = useCallback(() => {
@@ -2223,12 +2418,12 @@ export default function AdminMainScreen({
   ]);
 
   useEffect(() => {
-    if (workerRateDialogTarget == null) return;
+    if (workerRateDialogTarget == null || workerRateDialogFetchBusy) return;
     const t = window.setTimeout(() => {
       workerRateBaseInputRef.current?.focus();
     }, 0);
     return () => window.clearTimeout(t);
-  }, [workerRateDialogTarget]);
+  }, [workerRateDialogTarget, workerRateDialogFetchBusy]);
 
   useEffect(() => {
     if (!lnMoneyUnlockOpen) return;
@@ -3768,6 +3963,7 @@ export default function AdminMainScreen({
               className="fixed inset-0 z-[415] flex items-center justify-center bg-black/35 p-4"
               role="presentation"
               onPointerDown={(e) => {
+                if (workerRateSaveBusy) return;
                 if (e.target === e.currentTarget) closeWorkerRateDialog();
               }}
             >
@@ -3787,6 +3983,13 @@ export default function AdminMainScreen({
                 <p className="mt-2 text-sm font-semibold text-slate-800">
                   {workerRateDialogTarget.workerName}
                 </p>
+                {workerRateDialogFetchBusy ? (
+                  <p className="mt-2 text-xs text-slate-600" role="status">
+                    {
+                      "\uC11C\uBC84\uC5D0\uC11C \uB2E8\uAC00\uB97C \uBD88\uB7EC\uC624\uB294 \uC911\uC785\uB2C8\uB2E4\u2026"
+                    }
+                  </p>
+                ) : null}
                 <label className="mt-3 block text-xs font-medium text-slate-700">
                   {"\uAE30\uC900"}
                   <input
@@ -3799,7 +4002,10 @@ export default function AdminMainScreen({
                       const v = sanitizeRateInputRaw(e.target.value);
                       setWorkerRateDraft((prev) => ({ ...prev, baseInput: v }));
                     }}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    disabled={
+                      workerRateDialogFetchBusy || workerRateSaveBusy
+                    }
+                    className="mt-1 w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-100"
                     autoComplete="off"
                     aria-label={"\uAE30\uC900 \uB2E8\uAC00"}
                   />
@@ -3818,7 +4024,10 @@ export default function AdminMainScreen({
                         spreadInput: v,
                       }));
                     }}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    disabled={
+                      workerRateDialogFetchBusy || workerRateSaveBusy
+                    }
+                    className="mt-1 w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 disabled:cursor-not-allowed disabled:bg-slate-100"
                     autoComplete="off"
                     aria-label={"\uCC28\uC775 \uB2E8\uAC00"}
                   />
@@ -3827,16 +4036,22 @@ export default function AdminMainScreen({
                   <button
                     type="button"
                     onClick={closeWorkerRateDialog}
-                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50 md:text-sm"
+                    disabled={workerRateSaveBusy}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
                   >
                     {"\uCDE8\uC18C"}
                   </button>
                   <button
                     type="button"
-                    onClick={handleSaveWorkerRateDialog}
-                    className="rounded-md border border-teal-600 bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 md:text-sm"
+                    onClick={() => void handleSaveWorkerRateDialog()}
+                    disabled={
+                      workerRateDialogFetchBusy || workerRateSaveBusy
+                    }
+                    className="rounded-md border border-teal-600 bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
                   >
-                    {"\uC800\uC7A5"}
+                    {workerRateSaveBusy
+                      ? "\uC800\uC7A5 \uC911\u2026"
+                      : "\uC800\uC7A5"}
                   </button>
                 </div>
               </div>
