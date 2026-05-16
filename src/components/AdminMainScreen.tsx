@@ -2471,6 +2471,23 @@ export default function AdminMainScreen({
               ) : null}
               </div>
             ) : null}
+            <button
+              type="button"
+              aria-current={mainView === "monthlyPayroll" ? "page" : undefined}
+              onClick={() => {
+                setIdHeaderMenuOpen(false);
+                setPersonnelMenuOpen(false);
+                setMainView("monthlyPayroll");
+                setOpenYear(null);
+              }}
+              className={`whitespace-nowrap rounded-md border px-2 py-1.5 text-[11px] font-semibold shadow-sm transition active:bg-slate-100 md:px-2.5 md:text-xs ${
+                mainView === "monthlyPayroll"
+                  ? "border-teal-600 bg-teal-600 text-white hover:bg-teal-700"
+                  : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
+              }`}
+            >
+              {"\uC6D4\uAE09\uC5EC"}
+            </button>
             <div className="relative" data-personnel-header-slot="">
               <button
                 type="button"
@@ -2505,23 +2522,6 @@ export default function AdminMainScreen({
                 </div>
               ) : null}
             </div>
-            <button
-              type="button"
-              aria-current={mainView === "monthlyPayroll" ? "page" : undefined}
-              onClick={() => {
-                setIdHeaderMenuOpen(false);
-                setPersonnelMenuOpen(false);
-                setMainView("monthlyPayroll");
-                setOpenYear(null);
-              }}
-              className={`whitespace-nowrap rounded-md border px-2 py-1.5 text-[11px] font-semibold shadow-sm transition active:bg-slate-100 md:px-2.5 md:text-xs ${
-                mainView === "monthlyPayroll"
-                  ? "border-teal-600 bg-teal-600 text-white hover:bg-teal-700"
-                  : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
-              }`}
-            >
-              {"\uC6D4\uAE09\uC5EC"}
-            </button>
             <button
               type="button"
               onClick={onLogout}
@@ -2680,21 +2680,7 @@ export default function AdminMainScreen({
             </button>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5 border-l border-slate-200 bg-white py-2 pl-2 pr-1 md:gap-2 md:pr-2">
-          <button
-            type="button"
-            onClick={() => {
-              setMainView("monthlyPayroll");
-              setOpenYear(null);
-            }}
-            className={`shrink-0 rounded border px-2.5 py-1.5 text-xs font-semibold transition md:text-sm ${
-              mainView === "monthlyPayroll"
-                ? "border-teal-600 bg-teal-600 text-white shadow-sm"
-                : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
-            }`}
-          >
-            {"\uC6D4\uAE09\uC5EC"}
-          </button>
+        <div className="flex shrink-0 items-center border-l border-slate-200 bg-white py-2 pl-2 pr-1 md:pr-2">
           <button
             type="button"
             disabled={activeSheetKey == null}
