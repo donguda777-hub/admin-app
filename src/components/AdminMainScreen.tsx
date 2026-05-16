@@ -59,6 +59,7 @@ import {
   normalizeProjectName,
   renameProjectNameWithWorkerEntriesInSupabase,
 } from "../lib/projectsFromSupabase";
+import { TIMESHEET_COMPANY_GROUP_NAMES } from "../lib/timesheetCompanyGroups";
 import { getSupabaseBrowserClient } from "../lib/supabaseClient";
 import {
   MASTER_ADMIN_ID,
@@ -120,10 +121,10 @@ const COMPANY_ROW_DEFS: ReadonlyArray<{
   name: string;
   tone: CompanyToneKey;
 }> = [
-  { name: "L&N", tone: "ln" },
-  { name: "L-LINE", tone: "lline" },
-  { name: "\uBBFC\uC601", tone: "minyeong" },
-  { name: "\uAC1C\uC778", tone: "individual" },
+  { name: TIMESHEET_COMPANY_GROUP_NAMES[0], tone: "ln" },
+  { name: TIMESHEET_COMPANY_GROUP_NAMES[1], tone: "lline" },
+  { name: TIMESHEET_COMPANY_GROUP_NAMES[2], tone: "minyeong" },
+  { name: TIMESHEET_COMPANY_GROUP_NAMES[3], tone: "individual" },
 ];
 
 const WORKER_SLOT_COUNT = WORKER_COLUMN_COUNT;

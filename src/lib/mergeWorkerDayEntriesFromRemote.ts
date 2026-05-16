@@ -1,9 +1,15 @@
 import {
   bodyCellKey,
+  DEFAULT_COMPANY_WORKER_SLOT_COUNTS,
+  normalizeCompanyWorkerSlotCounts,
   timesheetWorkerIdCellKey,
   timesheetWorkerNameCellKey,
   type TimesheetGridPersisted,
 } from "../adminPersist";
+import {
+  companyWorkerSlotRanges,
+  mapStoredCompanyToTimesheetGroupIndex,
+} from "./timesheetCompanyGroups";
 
 /** Supabase `worker_day_entries` 행(조회 select 결과) */
 export type WorkerDayEntryRemoteRow = {
@@ -43,6 +49,43 @@ function normalizeNameKey(s: string): string {
 
 function normalizeProjectKey(s: string): string {
   return s.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** 프로젝트·기간 내 작업자명 → 업체 그룹 인덱스(미매칭·빈 값은 null) */
+function buildWorkerCompanyGroupIndexByName(
+  rows: WorkerDayEntryRemoteRow[],
+  projectKey: string,
+  lastDay: number
+): Map<string, number | null> {
+  const out = new Map<string, number | null>();
+  if (!Array.isArray(rows)) return out;
+  for (const row of rows) {
+    if (row == null || typeof row !== "object") continue;
+    if (row.deleted_at != null && String(row.deleted_at).trim() !== "") {
+      continue;
+    }
+    const pn = String(row.project_name ?? "").trim();
+    if (normalizeProjectKey(pn) !== projectKey) continue;
+    const wd =
+      typeof row.work_date === "string"
+        ? row.work_date
+        : row.work_date != null
+          ? String(row.work_date)
+          : "";
+    const day = dayFromWorkDate(wd);
+    if (day == null || day < 1 || day > lastDay) continue;
+    const wn = String(row.worker_name ?? "").trim();
+    if (!wn) continue;
+    const nk = normalizeNameKey(wn);
+    const idx = mapStoredCompanyToTimesheetGroupIndex(row.company_name);
+    const existing = out.get(nk);
+    if (existing === undefined) {
+      out.set(nk, idx);
+    } else if (existing === null && idx != null) {
+      out.set(nk, idx);
+    }
+  }
+  return out;
 }
 
 /** 프로젝트·기간 내 작업자명 → worker_id (첫 유효 id) */
@@ -229,6 +272,15 @@ export function buildTimesheetGridFromRemoteRows(
     if (diag) diag.aggKeys = aggregated.size;
 
     const workerIdByName = buildWorkerIdByNameMap(rows, projectKey, lastDay);
+    const workerCompanyByName = buildWorkerCompanyGroupIndexByName(
+      rows,
+      projectKey,
+      lastDay
+    );
+    const companyCounts = normalizeCompanyWorkerSlotCounts([
+      ...DEFAULT_COMPANY_WORKER_SLOT_COUNTS,
+    ]);
+    const ranges = companyWorkerSlotRanges(companyCounts);
 
     const assignWorkerSlot = (workerName: string): number => {
       const nameKey = normalizeNameKey(workerName);
@@ -236,6 +288,44 @@ export function buildTimesheetGridFromRemoteRows(
       if (existing !== undefined) {
         setWorkerIdOnSlot(body, existing, workerName, workerIdByName);
         return existing;
+      }
+
+      const takeNextInRange = (start: number, endEx: number): number => {
+        for (let wi = start; wi < endEx && wi < slotCount; wi++) {
+          if (usedSlots.has(wi)) continue;
+          const nk = timesheetWorkerNameCellKey(wi);
+          if ((body[nk] ?? "").trim() === "") {
+            body[nk] = workerName;
+            setWorkerIdOnSlot(body, wi, workerName, workerIdByName);
+            workerSlotByName.set(nameKey, wi);
+            usedSlots.add(wi);
+            if (diag) diag.slotsFilledByEmptyColumn += 1;
+            return wi;
+          }
+        }
+        for (let wi = start; wi < endEx && wi < slotCount; wi++) {
+          if (usedSlots.has(wi)) continue;
+          const nk = timesheetWorkerNameCellKey(wi);
+          body[nk] = workerName;
+          setWorkerIdOnSlot(body, wi, workerName, workerIdByName);
+          workerSlotByName.set(nameKey, wi);
+          usedSlots.add(wi);
+          if (diag) diag.slotsFilledByEmptyColumn += 1;
+          return wi;
+        }
+        return -1;
+      };
+
+      const gIdx = workerCompanyByName.get(nameKey);
+      if (
+        gIdx !== undefined &&
+        gIdx !== null &&
+        gIdx >= 0 &&
+        gIdx < ranges.length
+      ) {
+        const r = ranges[gIdx]!;
+        const wi = takeNextInRange(r.start, r.end);
+        if (wi >= 0) return wi;
       }
 
       for (let wi = 0; wi < slotCount; wi++) {
@@ -263,6 +353,31 @@ export function buildTimesheetGridFromRemoteRows(
       return -1;
     };
 
+    const uniqueWorkers: string[] = [];
+    const seenNk = new Set<string>();
+    for (const k of aggregated.keys()) {
+      const sep = k.indexOf("\u001f");
+      if (sep < 0) continue;
+      const workerName = k.slice(sep + 1);
+      const nk = normalizeNameKey(workerName);
+      if (!nk || seenNk.has(nk)) continue;
+      seenNk.add(nk);
+      uniqueWorkers.push(workerName);
+    }
+    uniqueWorkers.sort((a, b) => {
+      const na = normalizeNameKey(a);
+      const nb = normalizeNameKey(b);
+      const ga = workerCompanyByName.get(na);
+      const gb = workerCompanyByName.get(nb);
+      const ia = ga == null ? 999 : ga;
+      const ib = gb == null ? 999 : gb;
+      if (ia !== ib) return ia - ib;
+      return a.localeCompare(b, "ko");
+    });
+    for (const wn of uniqueWorkers) {
+      assignWorkerSlot(wn);
+    }
+
     for (const [aggKey, sumHours] of aggregated) {
       const sep = aggKey.indexOf("\u001f");
       if (sep < 0) continue;
@@ -271,8 +386,8 @@ export function buildTimesheetGridFromRemoteRows(
       const day = Number.parseInt(dayStr, 10);
       if (!Number.isFinite(day)) continue;
 
-      const wi = assignWorkerSlot(workerName);
-      if (wi < 0) continue;
+      const wi = workerSlotByName.get(normalizeNameKey(workerName));
+      if (wi === undefined) continue;
 
       const nextVal = formatWorkHoursForBodyCell(sumHours);
       if (nextVal === "") continue;
@@ -363,6 +478,15 @@ export function applyRemoteEffortToLayoutGrid(
   if (diag) diag.aggKeys = aggregated.size;
 
   const workerIdByName = buildWorkerIdByNameMap(rows, projectKey, lastDay);
+  const workerCompanyByName = buildWorkerCompanyGroupIndexByName(
+    rows,
+    projectKey,
+    lastDay
+  );
+  const companyCounts = normalizeCompanyWorkerSlotCounts(
+    layoutGrid.companyWorkerSlotCounts
+  );
+  const ranges = companyWorkerSlotRanges(companyCounts);
 
   const assignWorkerSlot = (workerName: string): number => {
     const nameKey = normalizeNameKey(workerName);
@@ -370,6 +494,31 @@ export function applyRemoteEffortToLayoutGrid(
     if (existing !== undefined) {
       setWorkerIdOnSlot(body, existing, workerName, workerIdByName);
       return existing;
+    }
+
+    const takeNextInRange = (start: number, endEx: number): number => {
+      for (let wi = start; wi < endEx && wi < slotCount; wi++) {
+        if (usedSlots.has(wi)) continue;
+        body[timesheetWorkerNameCellKey(wi)] = workerName;
+        setWorkerIdOnSlot(body, wi, workerName, workerIdByName);
+        workerSlotByName.set(nameKey, wi);
+        usedSlots.add(wi);
+        if (diag) diag.slotsFilledByEmptyColumn += 1;
+        return wi;
+      }
+      return -1;
+    };
+
+    const gIdx = workerCompanyByName.get(nameKey);
+    if (
+      gIdx !== undefined &&
+      gIdx !== null &&
+      gIdx >= 0 &&
+      gIdx < ranges.length
+    ) {
+      const r = ranges[gIdx]!;
+      const wi = takeNextInRange(r.start, r.end);
+      if (wi >= 0) return wi;
     }
 
     for (let wi = 0; wi < slotCount; wi++) {
@@ -384,6 +533,31 @@ export function applyRemoteEffortToLayoutGrid(
     return -1;
   };
 
+  const uniqueWorkers: string[] = [];
+  const seenNk = new Set<string>();
+  for (const k of aggregated.keys()) {
+    const sep = k.indexOf("\u001f");
+    if (sep < 0) continue;
+    const workerName = k.slice(sep + 1);
+    const nk = normalizeNameKey(workerName);
+    if (!nk || seenNk.has(nk)) continue;
+    seenNk.add(nk);
+    uniqueWorkers.push(workerName);
+  }
+  uniqueWorkers.sort((a, b) => {
+    const na = normalizeNameKey(a);
+    const nb = normalizeNameKey(b);
+    const ga = workerCompanyByName.get(na);
+    const gb = workerCompanyByName.get(nb);
+    const ia = ga == null ? 999 : ga;
+    const ib = gb == null ? 999 : gb;
+    if (ia !== ib) return ia - ib;
+    return a.localeCompare(b, "ko");
+  });
+  for (const wn of uniqueWorkers) {
+    assignWorkerSlot(wn);
+  }
+
   for (const [aggKey, sumHours] of aggregated) {
     const sep = aggKey.indexOf("\u001f");
     if (sep < 0) continue;
@@ -392,8 +566,8 @@ export function applyRemoteEffortToLayoutGrid(
     const day = Number.parseInt(dayStr, 10);
     if (!Number.isFinite(day) || sumHours <= 0) continue;
 
-    const wi = assignWorkerSlot(workerName);
-    if (wi < 0) continue;
+    const wi = workerSlotByName.get(normalizeNameKey(workerName));
+    if (wi === undefined) continue;
 
     const nextVal = formatWorkHoursForBodyCell(sumHours);
     if (nextVal === "") continue;
