@@ -62,6 +62,10 @@ import {
 } from "../lib/projectsFromSupabase";
 import { deleteWorkerDayEntriesForMonthProjectAndCompanyGroup } from "../lib/deleteWorkerDayEntriesFromSupabase";
 import {
+  buildFlatWorkersByWorkerId,
+  computeMonthlyPayrollRows,
+} from "../lib/monthlyPayrollAggregate";
+import {
   TIMESHEET_COMPANY_GROUP_NAMES,
   companyWorkerSlotRanges,
 } from "../lib/timesheetCompanyGroups";
@@ -582,7 +586,7 @@ export default function AdminMainScreen({
     useState<TimesheetLayoutClipboardV1 | null>(null);
 
   const [mainView, setMainView] = useState<
-    "timesheet" | "personnel" | "accountList"
+    "timesheet" | "personnel" | "accountList" | "monthlyPayroll"
   >("timesheet");
   const [selectedPersonnelGrade, setSelectedPersonnelGrade] = useState<
     string | null
@@ -720,7 +724,12 @@ export default function AdminMainScreen({
   }, []);
 
   useEffect(() => {
-    if (mainView !== "timesheet") return;
+    if (
+      mainView !== "timesheet" &&
+      mainView !== "monthlyPayroll" &&
+      mainView !== "personnel"
+    )
+      return;
     void reloadServerProjects();
   }, [mainView, reloadServerProjects]);
 
@@ -1249,6 +1258,35 @@ export default function AdminMainScreen({
     if (parts.length === 0) return null;
     return sumFiniteNumbers(parts);
   }, [workerLnTotals]);
+
+  const monthlyPayrollRows = useMemo(() => {
+    if (
+      timesheetYear == null ||
+      timesheetMonth == null ||
+      activeSheetKey == null
+    ) {
+      return [];
+    }
+    const workersByWorkerId = buildFlatWorkersByWorkerId(
+      workersByGradeFromSupabase
+    );
+    return computeMonthlyPayrollRows({
+      year: timesheetYear,
+      month1Based: timesheetMonth,
+      projects,
+      timesheetGrids,
+      workerRatesByKey,
+      workersByWorkerId,
+    });
+  }, [
+    timesheetYear,
+    timesheetMonth,
+    activeSheetKey,
+    projects,
+    timesheetGrids,
+    workerRatesByKey,
+    workersByGradeFromSupabase,
+  ]);
 
   const onYearClick = useCallback((y: number) => {
     setOpenYear((prev) => {
@@ -2308,7 +2346,7 @@ export default function AdminMainScreen({
   }, [mainView, selectedPersonnelGrade]);
 
   useEffect(() => {
-    if (mainView !== "personnel") return;
+    if (mainView !== "personnel" && mainView !== "monthlyPayroll") return;
     const gen = ++workersPersonnelFetchGenRef.current;
     void fetchWorkersGroupedByPersonnelGrade().then(({ byGrade, error }) => {
       if (workersPersonnelFetchGenRef.current !== gen) return;
@@ -2469,6 +2507,23 @@ export default function AdminMainScreen({
             </div>
             <button
               type="button"
+              aria-current={mainView === "monthlyPayroll" ? "page" : undefined}
+              onClick={() => {
+                setIdHeaderMenuOpen(false);
+                setPersonnelMenuOpen(false);
+                setMainView("monthlyPayroll");
+                setOpenYear(null);
+              }}
+              className={`whitespace-nowrap rounded-md border px-2 py-1.5 text-[11px] font-semibold shadow-sm transition active:bg-slate-100 md:px-2.5 md:text-xs ${
+                mainView === "monthlyPayroll"
+                  ? "border-teal-600 bg-teal-600 text-white hover:bg-teal-700"
+                  : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
+              }`}
+            >
+              {"\uC6D4\uAE09\uC5EC"}
+            </button>
+            <button
+              type="button"
               onClick={onLogout}
               className="whitespace-nowrap rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 active:bg-slate-100 md:px-3 md:text-sm"
             >
@@ -2478,7 +2533,9 @@ export default function AdminMainScreen({
         </div>
       </header>
 
-      {mainView === "timesheet" ? (
+      {mainView === "timesheet" ||
+      mainView === "monthlyPayroll" ||
+      mainView === "personnel" ? (
         <>
           {/* ???? ??? ???, ?????????? ???????overflow ???? */}
           <div className="shrink-0 w-full min-w-0 overflow-x-visible overflow-y-visible border-b border-slate-200 bg-white py-2.5 pl-1 pr-1 md:pl-2 md:pr-2">
@@ -2576,13 +2633,16 @@ export default function AdminMainScreen({
             ) : (
               projects.map((p) => {
                 const active =
-                  sheetView === "project" && selectedProjectId === p.id;
+                  mainView === "timesheet" &&
+                  sheetView === "project" &&
+                  selectedProjectId === p.id;
                 return (
                   <button
                     key={p.id}
                     type="button"
                     data-project-tab=""
                     onClick={() => {
+                      setMainView("timesheet");
                       setSheetView("project");
                       setSelectedProjectId(p.id);
                     }}
@@ -2620,16 +2680,31 @@ export default function AdminMainScreen({
             </button>
           </div>
         </div>
-        <div className="flex shrink-0 items-center border-l border-slate-200 bg-white py-2 pl-2 pr-1 md:pr-2">
+        <div className="flex shrink-0 items-center gap-1.5 border-l border-slate-200 bg-white py-2 pl-2 pr-1 md:gap-2 md:pr-2">
+          <button
+            type="button"
+            onClick={() => {
+              setMainView("monthlyPayroll");
+              setOpenYear(null);
+            }}
+            className={`shrink-0 rounded border px-2.5 py-1.5 text-xs font-semibold transition md:text-sm ${
+              mainView === "monthlyPayroll"
+                ? "border-teal-600 bg-teal-600 text-white shadow-sm"
+                : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
+            }`}
+          >
+            {"\uC6D4\uAE09\uC5EC"}
+          </button>
           <button
             type="button"
             disabled={activeSheetKey == null}
             onClick={() => {
+              setMainView("timesheet");
               setSheetView("summary");
               setSelectedProjectId(null);
             }}
             className={`shrink-0 rounded border px-2.5 py-1.5 text-xs font-semibold transition md:text-sm ${
-              sheetView === "summary"
+              mainView === "timesheet" && sheetView === "summary"
                 ? "border-teal-600 bg-teal-600 text-white shadow-sm"
                 : "border-slate-300 bg-white text-slate-800 hover:bg-slate-50"
             } disabled:cursor-not-allowed disabled:opacity-40`}
@@ -2881,6 +2956,97 @@ export default function AdminMainScreen({
                 );
               })()}
             </div>
+          ) : mainView === "monthlyPayroll" ? (
+            <>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-0.5 md:px-1">
+                <h2 className="min-w-0 flex-1 text-center text-sm font-bold text-slate-800 md:text-base">
+                  {timesheetYear != null && timesheetMonth != null
+                    ? `${timesheetYear}\uB144 ${timesheetMonth}\uC6D4 \uC6D4\uAE09\uC5EC`
+                    : "\uC6D4\uAE09\uC5EC"}
+                </h2>
+                <button
+                  type="button"
+                  onClick={goToTimesheetView}
+                  className="shrink-0 rounded-md border border-teal-600 bg-teal-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 md:text-sm"
+                >
+                  {"\uACF5\uC218\uD45C"}
+                </button>
+              </div>
+              <div className="overflow-x-auto rounded border border-slate-300 bg-white shadow-sm">
+                <table className="w-full min-w-[36rem] table-fixed border-collapse border border-slate-400 text-[11px] md:text-sm">
+                  <thead>
+                    <tr className="bg-slate-200">
+                      <th className="w-[18%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        {"\uC18C\uC18D"}
+                      </th>
+                      <th className="w-[22%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        {"\uC774\uB984"}
+                      </th>
+                      <th className="w-[20%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        {"\uCD1D\uACF5\uC218"}
+                      </th>
+                      <th className="w-[40%] border border-slate-400 px-2 py-1.5 text-center font-bold text-slate-900">
+                        {FOOTER_LABELS[2]}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeSheetKey == null ? (
+                      <tr>
+                        <td
+                          colSpan={4}
+                          className="border border-slate-400 px-3 py-6 text-center text-slate-600"
+                        >
+                          {
+                            "\uC5F0\uB3C4\uC640 \uC6D4\uC744 \uC120\uD0DD\uD558\uBA74 \uC6D4\uAE09\uC5EC \uC9D1\uACC4\uAC00 \uD45C\uC2DC\uB429\uB2C8\uB2E4."
+                          }
+                        </td>
+                      </tr>
+                    ) : monthlyPayrollRows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={4}
+                          className="border border-slate-400 px-3 py-6 text-center text-slate-600"
+                        >
+                          {
+                            "\uD574\uB2F9 \uC6D4\uC5D0 \uC9D1\uACC4\uB420 \uACF5\uC218 \uB370\uC774\uD130\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."
+                          }
+                        </td>
+                      </tr>
+                    ) : (
+                      monthlyPayrollRows.map((row) => (
+                        <tr
+                          key={row.workerKey}
+                          className="bg-white even:bg-slate-50/80"
+                        >
+                          <td className="border border-slate-400 px-2 py-1.5 align-middle text-slate-800">
+                            {row.company !== "" ? row.company : "\u00A0"}
+                          </td>
+                          <td className="border border-slate-400 px-2 py-1.5 align-middle font-medium text-slate-900">
+                            {row.displayName}
+                          </td>
+                          <td className="border border-slate-400 px-2 py-1.5 text-right align-middle tabular-nums text-slate-800">
+                            {formatEffortFooterTotal(row.totalEffort) || "0"}
+                          </td>
+                          <td className="border border-slate-400 px-2 py-1.5 text-right align-middle tabular-nums text-slate-800">
+                            {showAmountRows ? (
+                              row.totalNetPay != null &&
+                              Number.isFinite(row.totalNetPay) ? (
+                                formatMoneyAmount(row.totalNetPay)
+                              ) : (
+                                "\u2014"
+                              )
+                            ) : (
+                              MONEY_FOOTER_MASK
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
           ) : mainView === "accountList" && canManageAccounts ? (
             <>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-0.5 md:px-1">
