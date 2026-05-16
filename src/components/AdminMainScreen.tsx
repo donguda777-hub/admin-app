@@ -51,6 +51,7 @@ import {
 import {
   fetchWorkersGroupedByPersonnelGrade,
   mergePersonnelGradeForDisplay,
+  personnelRowCompanyDisplay,
   type WorkerRemoteRow,
 } from "../lib/personnelWorkersFromSupabase";
 import {
@@ -2538,6 +2539,29 @@ export default function AdminMainScreen({
                 const rowAt = (gi: number): PersonnelRowPersist =>
                   displayRows[gi] ?? emptyRow;
 
+                const renderCompanyCell = (globalRi: number) => {
+                  const row = rowAt(globalRi);
+                  const meta = displayMeta[globalRi];
+                  const company = personnelRowCompanyDisplay(
+                    row,
+                    meta,
+                    workersByGradeFromSupabase
+                  );
+                  const showBlank = company === "";
+                  return (
+                    <td
+                      key={`${globalRi}-company`}
+                      data-personnel-table-cell
+                      className="relative cursor-default border border-slate-500 align-middle"
+                      onContextMenu={(e) => e.preventDefault()}
+                    >
+                      <div className="min-h-[1.75rem] truncate px-1 py-0.5 text-left text-[12px] leading-tight md:text-[13px]">
+                        {showBlank ? "\u00A0" : company}
+                      </div>
+                    </td>
+                  );
+                };
+
                 const renderFieldCell = (
                   globalRi: number,
                   f: (typeof PERSONNEL_TABLE_FIELDS)[number]
@@ -2651,14 +2675,18 @@ export default function AdminMainScreen({
                   baseOffset: number,
                   rowCount: number
                 ) => (
-                  <table className="w-full min-w-[12rem] table-fixed border-collapse border border-slate-500 text-[12px] leading-tight md:text-[13px]">
+                  <table className="w-full min-w-[14rem] table-fixed border-collapse border border-slate-500 text-[12px] leading-tight md:text-[13px]">
                     <colgroup>
-                      <col style={{ width: "34%" }} />
+                      <col style={{ width: "20%" }} />
+                      <col style={{ width: "22%" }} />
                       <col style={{ width: "28%" }} />
-                      <col style={{ width: "38%" }} />
+                      <col style={{ width: "30%" }} />
                     </colgroup>
                     <thead>
                       <tr className="bg-slate-200">
+                        <th className="border border-slate-500 px-1 py-0.5 text-center text-[12px] font-bold text-slate-900 md:px-1.5 md:py-0.5 md:text-[13px]">
+                          {"\uC18C\uC18D"}
+                        </th>
                         {PERSONNEL_TABLE_FIELDS.map((col) => (
                           <th
                             key={col.field}
@@ -2677,6 +2705,7 @@ export default function AdminMainScreen({
                             key={globalRi}
                             className="bg-white even:bg-slate-50/80"
                           >
+                            {renderCompanyCell(globalRi)}
                             {PERSONNEL_TABLE_FIELDS.map((f) =>
                               renderFieldCell(globalRi, f)
                             )}

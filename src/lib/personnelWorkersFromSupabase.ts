@@ -106,6 +106,40 @@ export function mergePersonnelGradeForDisplay(
   return { rows, meta };
 }
 
+/** `worker_id`로 전체 등급 버킷에서 `workers` 행을 찾는다(인적사항 소속 표시용). */
+export function findWorkerRemoteById(
+  byGrade: Record<string, WorkerRemoteRow[]> | null,
+  workerId: string
+): WorkerRemoteRow | null {
+  const id = workerId.trim();
+  if (!id || byGrade == null) return null;
+  for (const rows of Object.values(byGrade)) {
+    const hit = rows.find((w) => (w.worker_id ?? "").trim() === id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * 인적사항 표의 소속: Supabase `workers.company_name` 최신값만 사용.
+ * (공수표·worker_day_entries의 과거 업체명과 무관)
+ */
+export function personnelRowCompanyDisplay(
+  row: PersonnelRowPersist,
+  meta: PersonnelRowDisplayMeta | undefined,
+  byGrade: Record<string, WorkerRemoteRow[]> | null
+): string {
+  if (meta == null || byGrade == null) return "";
+  if (meta.source === "remote") {
+    const w = findWorkerRemoteById(byGrade, meta.workerId);
+    return (w?.company_name ?? "").trim();
+  }
+  const wid = personnelRowWorkerId(row);
+  if (!wid) return "";
+  const w = findWorkerRemoteById(byGrade, wid);
+  return (w?.company_name ?? "").trim();
+}
+
 export type FetchWorkersForPersonnelResult = {
   byGrade: Record<string, WorkerRemoteRow[]>;
   error: string | null;
