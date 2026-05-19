@@ -95,6 +95,11 @@ import {
   type AdminRole,
 } from "../auth/adminRoles";
 import { verifyAdminLoginPassword } from "../auth/verifyAdminLoginPassword";
+import {
+  deleteExtraAdminAccountFromSupabase,
+  loadExtraAdminAccountsForSession,
+  upsertExtraAdminAccountToSupabase,
+} from "../lib/adminsFromSupabase";
 
 type AdminMainScreenProps = {
   onLogout: () => void;
@@ -673,7 +678,7 @@ export default function AdminMainScreen({
 
   const [extraAdminAccounts, setExtraAdminAccounts] = useState<
     AdminExtraAccountPersist[]
-  >(() => readPersist().extraAdminAccounts ?? []);
+  >([]);
 
   const adminRole: AdminRole = useMemo(
     () => resolveAdminRole(loggedInUserId, extraAdminAccounts),
@@ -1753,14 +1758,25 @@ export default function AdminMainScreen({
   }, []);
 
   const submitLnMoneyUnlock = useCallback(() => {
-    if (verifyAdminLoginPassword(loggedInUserId, lnMoneyUnlockPassword)) {
-      setMoneyFooterUnmasked(true);
-      closeLnMoneyUnlockDialog();
-      return;
-    }
-    setLnMoneyUnlockError(
-      "\uBE44\uBC00\uBC88\uD638\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
-    );
+    void (async () => {
+      try {
+        if (
+          await verifyAdminLoginPassword(
+            loggedInUserId,
+            lnMoneyUnlockPassword
+          )
+        ) {
+          setMoneyFooterUnmasked(true);
+          closeLnMoneyUnlockDialog();
+          return;
+        }
+      } catch {
+        /* fall through */
+      }
+      setLnMoneyUnlockError(
+        "\uBE44\uBC00\uBC88\uD638\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
+      );
+    })();
   }, [
     loggedInUserId,
     lnMoneyUnlockPassword,
@@ -1788,14 +1804,25 @@ export default function AdminMainScreen({
   }, []);
 
   const submitSummaryLnUnlock = useCallback(() => {
-    if (verifyAdminLoginPassword(loggedInUserId, summaryLnUnlockPassword)) {
-      setSummaryLnUnmasked(true);
-      closeSummaryLnUnlockDialog();
-      return;
-    }
-    setSummaryLnUnlockError(
-      "\uBE44\uBC00\uBC88\uD638\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
-    );
+    void (async () => {
+      try {
+        if (
+          await verifyAdminLoginPassword(
+            loggedInUserId,
+            summaryLnUnlockPassword
+          )
+        ) {
+          setSummaryLnUnmasked(true);
+          closeSummaryLnUnlockDialog();
+          return;
+        }
+      } catch {
+        /* fall through */
+      }
+      setSummaryLnUnlockError(
+        "\uBE44\uBC00\uBC88\uD638\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."
+      );
+    })();
   }, [
     loggedInUserId,
     summaryLnUnlockPassword,
@@ -2126,7 +2153,7 @@ export default function AdminMainScreen({
     setDeleteExtraConfirmIndex(null);
   }, []);
 
-  const submitCreateAdminAccount = useCallback(() => {
+  const submitCreateAdminAccount = useCallback(async () => {
     if (!canManageAccounts) return;
     const nid = createDraftId.trim();
     const npw = createDraftPassword.trim();
@@ -2157,10 +2184,20 @@ export default function AdminMainScreen({
       );
       return;
     }
-    setExtraAdminAccounts((prev) => [
-      ...prev,
-      { id: nid, password: npw, user: nuser, role: createDraftRole },
-    ]);
+    const row: AdminExtraAccountPersist = {
+      id: nid,
+      password: npw,
+      user: nuser,
+      role: createDraftRole,
+    };
+    const err = await upsertExtraAdminAccountToSupabase(row);
+    if (err != null) {
+      window.alert(
+        `\uACC4\uC815 \uC800\uC7A5\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.\n${err}`
+      );
+      return;
+    }
+    setExtraAdminAccounts((prev) => [...prev, row]);
     setCreateAccountModalOpen(false);
     setCreateDraftId("");
     setCreateDraftPassword("");
@@ -2180,7 +2217,7 @@ export default function AdminMainScreen({
     setEditExtraDraft({ id: "", password: "", user: "", role: "AMOUNT_ADMIN" });
   }, []);
 
-  const saveEditExtraAccount = useCallback(() => {
+  const saveEditExtraAccount = useCallback(async () => {
     if (!canManageAccounts) return;
     if (editingExtraAccountIndex == null) return;
     const ix = editingExtraAccountIndex;
@@ -2214,6 +2251,32 @@ export default function AdminMainScreen({
       );
       return;
     }
+    const prevRow = extraAdminAccounts[ix];
+    if (prevRow == null) return;
+    const nextRow: AdminExtraAccountPersist = {
+      id: nid,
+      password: npw,
+      user: nuser,
+      role: editExtraDraft.role,
+    };
+    if (
+      normalizeAdminAccountId(prevRow.id) !== normalizeAdminAccountId(nid)
+    ) {
+      const delErr = await deleteExtraAdminAccountFromSupabase(prevRow.id);
+      if (delErr != null) {
+        window.alert(
+          `\uACC4\uC815 \uC218\uC815\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.\n${delErr}`
+        );
+        return;
+      }
+    }
+    const err = await upsertExtraAdminAccountToSupabase(nextRow);
+    if (err != null) {
+      window.alert(
+        `\uACC4\uC815 \uC800\uC7A5\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.\n${err}`
+      );
+      return;
+    }
     setExtraAdminAccounts((prev) => {
       if (ix < 0 || ix >= prev.length) return prev;
       if (
@@ -2222,12 +2285,7 @@ export default function AdminMainScreen({
       )
         return prev;
       const next = [...prev];
-      next[ix] = {
-        id: nid,
-        password: npw,
-        user: nuser,
-        role: editExtraDraft.role,
-      };
+      next[ix] = nextRow;
       return next;
     });
     cancelEditExtraAccount();
@@ -2295,10 +2353,20 @@ export default function AdminMainScreen({
     [canManageAccounts, extraAdminAccounts]
   );
 
-  const confirmDeleteExtraAccount = useCallback(() => {
+  const confirmDeleteExtraAccount = useCallback(async () => {
     if (!canManageAccounts) return;
     if (deleteExtraConfirmIndex == null) return;
     const delIx = deleteExtraConfirmIndex;
+    const row = extraAdminAccounts[delIx];
+    if (row != null) {
+      const err = await deleteExtraAdminAccountFromSupabase(row.id);
+      if (err != null) {
+        window.alert(
+          `\uACC4\uC815 \uC0AD\uC81C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4.\n${err}`
+        );
+        return;
+      }
+    }
     setExtraAdminAccounts((prev) => {
       if (delIx < 0 || delIx >= prev.length) return prev;
       if (
@@ -2311,7 +2379,7 @@ export default function AdminMainScreen({
     setDeleteExtraConfirmIndex(null);
     setEditingExtraAccountIndex(null);
     setEditExtraDraft({ id: "", password: "", user: "", role: "AMOUNT_ADMIN" });
-  }, [canManageAccounts, deleteExtraConfirmIndex]);
+  }, [canManageAccounts, deleteExtraConfirmIndex, extraAdminAccounts]);
 
   const cancelDeleteExtraAccount = useCallback(() => {
     setDeleteExtraConfirmIndex(null);
@@ -2498,7 +2566,7 @@ export default function AdminMainScreen({
       summaryTotalsBySheet: {},
       companyWorkerSlotCounts: [...DEFAULT_COMPANY_WORKER_SLOT_COUNTS],
       personnelByGrade,
-      extraAdminAccounts,
+      extraAdminAccounts: [],
       workerRatesByKey,
     };
     const id = window.setTimeout(() => {
@@ -2518,9 +2586,19 @@ export default function AdminMainScreen({
     sheetView,
     timesheetGrids,
     personnelByGrade,
-    extraAdminAccounts,
     workerRatesByKey,
   ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const localExtras = readPersist().extraAdminAccounts ?? [];
+    void loadExtraAdminAccountsForSession(localExtras).then((rows) => {
+      if (!cancelled) setExtraAdminAccounts(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (workerRateDialogTarget == null || workerRateDialogFetchBusy) return;

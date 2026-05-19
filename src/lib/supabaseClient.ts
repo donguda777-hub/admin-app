@@ -11,7 +11,18 @@ function readEnv(): { url: string; anonKey: string } | null {
   const url = import.meta.env.VITE_SUPABASE_URL?.trim() ?? "";
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() ?? "";
   if (!url || !anonKey) return null;
+  if (url.includes("YOUR_PROJECT_REF")) return null;
+  if (anonKey === "your_anon_public_key_here") return null;
   return { url, anonKey };
+}
+
+/** 운영 빌드에서 Supabase env 가 없으면 로그인 차단용 메시지 */
+export function getSupabaseConfigErrorMessage(): string | null {
+  if (isSupabaseConfigured()) return null;
+  if (import.meta.env.PROD) {
+    return "\uC11C\uBC84 \uC124\uC815(Supabase \uD658\uACBD\uBCC0\uC218)\uC774 \uC5C6\uC2B5\uB2C8\uB2E4. \uBC30\uD3EC \uAD00\uB9AC\uC790\uC5D0\uAC8C VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY \uB4F1\uB85D\uC744 \uD655\uC778\uD558\uC138\uC694.";
+  }
+  return null;
 }
 
 export function isSupabaseConfigured(): boolean {

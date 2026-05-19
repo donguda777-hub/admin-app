@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { verifyAdminLoginPassword } from "../auth/verifyAdminLoginPassword";
+import { getSupabaseConfigErrorMessage } from "../lib/supabaseClient";
 
 const LOGIN_FAIL_MSG =
   "\uC544\uC774\uB514 \uB610\uB294 \uBE44\uBC00\uBC88\uD638\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.";
+
+const supabaseConfigError = getSupabaseConfigErrorMessage();
 
 type LoginScreenProps = {
   onLoginSuccess: (loggedInUserId: string) => void;
@@ -12,17 +15,30 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [id, setId] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (submitting) return;
     setError(null);
-    const tid = id.trim();
-    const tpw = password.trim();
-    if (verifyAdminLoginPassword(tid, tpw)) {
-      onLoginSuccess(tid);
+    if (supabaseConfigError != null) {
+      setError(supabaseConfigError);
       return;
     }
-    setError(LOGIN_FAIL_MSG);
+    const tid = id.trim();
+    const tpw = password.trim();
+    setSubmitting(true);
+    try {
+      if (await verifyAdminLoginPassword(tid, tpw)) {
+        onLoginSuccess(tid);
+        return;
+      }
+      setError(LOGIN_FAIL_MSG);
+    } catch {
+      setError(LOGIN_FAIL_MSG);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -60,7 +76,8 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 autoComplete="username"
                 value={id}
                 onChange={(e) => setId(e.target.value)}
-                className="h-11 w-full rounded-lg border border-yellow-400/50 bg-zinc-950/90 px-3 text-sm text-yellow-50 shadow-neon-gold outline-none ring-0 transition placeholder:text-yellow-200/35 focus:border-yellow-300 focus:shadow-neon-gold-lg focus:ring-2 focus:ring-yellow-400/30"
+                disabled={submitting}
+                className="h-11 w-full rounded-lg border border-yellow-400/50 bg-zinc-950/90 px-3 text-sm text-yellow-50 shadow-neon-gold outline-none ring-0 transition placeholder:text-yellow-200/35 focus:border-yellow-300 focus:shadow-neon-gold-lg focus:ring-2 focus:ring-yellow-400/30 disabled:opacity-60"
                 placeholder=""
               />
             </div>
@@ -78,9 +95,19 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="h-11 w-full rounded-lg border border-yellow-400/50 bg-zinc-950/90 px-3 text-sm text-yellow-50 shadow-neon-gold outline-none transition focus:border-yellow-300 focus:shadow-neon-gold-lg focus:ring-2 focus:ring-yellow-400/30"
+                disabled={submitting}
+                className="h-11 w-full rounded-lg border border-yellow-400/50 bg-zinc-950/90 px-3 text-sm text-yellow-50 shadow-neon-gold outline-none transition focus:border-yellow-300 focus:shadow-neon-gold-lg focus:ring-2 focus:ring-yellow-400/30 disabled:opacity-60"
               />
             </div>
+
+            {supabaseConfigError != null ? (
+              <p
+                className="text-center text-sm text-amber-200/95"
+                role="status"
+              >
+                {supabaseConfigError}
+              </p>
+            ) : null}
 
             {error ? (
               <p className="text-center text-sm text-rose-300/95" role="alert">
@@ -90,9 +117,10 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
             <button
               type="submit"
-              className="mt-2 h-12 w-full rounded-lg border border-yellow-400/70 bg-gradient-to-b from-yellow-400/95 to-amber-600/95 text-sm font-bold uppercase tracking-[0.25em] text-zinc-950 shadow-neon-gold-lg transition hover:from-yellow-300 hover:to-amber-500 active:brightness-95"
+              disabled={submitting || supabaseConfigError != null}
+              className="mt-2 h-12 w-full rounded-lg border border-yellow-400/70 bg-gradient-to-b from-yellow-400/95 to-amber-600/95 text-sm font-bold uppercase tracking-[0.25em] text-zinc-950 shadow-neon-gold-lg transition hover:from-yellow-300 hover:to-amber-500 active:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              LOGIN
+              {submitting ? "..." : "LOGIN"}
             </button>
           </form>
         </div>
