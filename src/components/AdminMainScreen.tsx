@@ -55,11 +55,19 @@ import {
   type WorkerRemoteRow,
 } from "../lib/personnelWorkersFromSupabase";
 import {
-  fetchActiveProjectsFromSupabase,
+  findProjectByNameFromSupabase,
   insertProjectToSupabase,
   normalizeProjectName,
   renameProjectNameWithWorkerEntriesInSupabase,
+  resolveProjectsByNamesFromSupabase,
 } from "../lib/projectsFromSupabase";
+import {
+  addProjectNameToMonthlyProjects,
+  ensureMonthlyProjectsForMonth,
+  formatMonthKey,
+  removeProjectNameFromMonthlyProjects,
+  renameProjectNameInMonthlyProjects,
+} from "../lib/monthlyProjectsFromSupabase";
 import { deleteWorkerDayEntriesForMonthProjectAndCompanyGroup } from "../lib/deleteWorkerDayEntriesFromSupabase";
 import {
   loadMonthlyPayrollData,
@@ -291,7 +299,7 @@ function formatRateInputValue(v: number | null | undefined): string {
   return String(Math.trunc(v));
 }
 
-/** ?????? ???: ????????????, ?????? null */
+/** 기준 단가 파싱: 숫자만, 음수 불가. 빈 값이면 null */
 function parseRateInputValue(raw: string): number | null {
   const digits = raw.replace(/\D/g, "");
   if (digits === "") return null;
@@ -299,8 +307,30 @@ function parseRateInputValue(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** 차익 단가 파싱: 맨 앞 '-' 허용. "-50000" → -50000 */
+function parseSpreadRateInputValue(raw: string): number | null {
+  const t = raw.trim();
+  if (t === "" || t === "-") return null;
+  const negative = t.startsWith("-");
+  const digits = t.replace(/\D/g, "");
+  if (digits === "") return null;
+  const n = Number.parseInt(digits, 10);
+  if (!Number.isFinite(n)) return null;
+  return negative ? -n : n;
+}
+
 function sanitizeRateInputRaw(raw: string): string {
   return raw.replace(/\D/g, "");
+}
+
+/** 차익 입력: 맨 앞 '-' 1개만 유지, 나머지 비숫자 제거 */
+function sanitizeSpreadRateInputRaw(raw: string): string {
+  const negative = raw.trimStart().startsWith("-");
+  const digits = raw.replace(/\D/g, "");
+  if (negative) {
+    return digits === "" ? "-" : `-${digits}`;
+  }
+  return digits;
 }
 
 function computeWorkerEffortTotalsForSummary(
@@ -483,8 +513,8 @@ function sheetKey(year: number, month: number): string {
   return `${year}-${month}`;
 }
 
-const PROJECT_CONTEXT_MENU_W = 140;
-const PROJECT_CONTEXT_MENU_H = 44;
+const PROJECT_CONTEXT_MENU_W = 168;
+const PROJECT_CONTEXT_MENU_H = 80;
 
 function clampProjectContextMenuPosition(
   clientX: number,
@@ -812,11 +842,19 @@ export default function AdminMainScreen({
   );
 
   const reloadServerProjects = useCallback(async () => {
-    const rows = await fetchActiveProjectsFromSupabase();
+    if (timesheetYear == null || timesheetMonth == null) {
+      setServerProjects([]);
+      return;
+    }
+    const names = await ensureMonthlyProjectsForMonth(
+      timesheetYear,
+      timesheetMonth
+    );
+    const rows = await resolveProjectsByNamesFromSupabase(names);
     setServerProjects(
       rows.map((r) => ({ id: r.id, name: r.project_name }))
     );
-  }, []);
+  }, [timesheetYear, timesheetMonth]);
 
   useEffect(() => {
     if (
@@ -825,8 +863,12 @@ export default function AdminMainScreen({
       mainView !== "personnel"
     )
       return;
+    if (timesheetYear == null || timesheetMonth == null) {
+      setServerProjects([]);
+      return;
+    }
     void reloadServerProjects();
-  }, [mainView, reloadServerProjects]);
+  }, [mainView, timesheetYear, timesheetMonth, reloadServerProjects]);
 
   useEffect(() => {
     if (selectedProjectId == null) return;
@@ -1655,6 +1697,7 @@ export default function AdminMainScreen({
         }
       }
       setRenameDialog(null);
+      await renameProjectNameInMonthlyProjects(oldName, result.project.project_name);
       await reloadServerProjects();
     },
     [
@@ -1832,7 +1875,7 @@ export default function AdminMainScreen({
   const handleSaveWorkerRateDialog = useCallback(async () => {
     if (workerRateDialogTarget == null || workerRateSaveBusy) return;
     const base = parseRateInputValue(workerRateDraft.baseInput);
-    const spread = parseRateInputValue(workerRateDraft.spreadInput);
+    const spread = parseSpreadRateInputValue(workerRateDraft.spreadInput);
     const { workerId, workerName, projectId, projectName } =
       workerRateDialogTarget;
 
@@ -1919,17 +1962,92 @@ export default function AdminMainScreen({
       "\uD504\uB85C\uC81D\uD2B8\uBA85\uC744 \uC785\uB825\uD558\uC138\uC694.";
     const raw = window.prompt(msg);
     if (raw == null || raw.trim() === "") return;
-    const inserted = await insertProjectToSupabase(raw);
-    if (inserted == null) {
+    const name = normalizeProjectName(raw);
+    if (name === "") return;
+
+    const monthKey = formatMonthKey(timesheetYear, timesheetMonth);
+    // 월 목록이 아직 없으면 승계/시드 후 추가
+    const monthNames = await ensureMonthlyProjectsForMonth(
+      timesheetYear,
+      timesheetMonth
+    );
+
+    if (monthNames.some((n) => normalizeProjectName(n) === name)) {
       window.alert(
-        "\uD504\uB85C\uC81D\uD2B8 \uCD94\uAC00\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. Supabase \uC5F0\uB3D9\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
+        `\uC774\uBBF8 "${name}" \uD504\uB85C\uC81D\uD2B8\uAC00 \uC774\uBC88 \uB2EC \uBAA9\uB85D\uC5D0 \uC788\uC2B5\uB2C8\uB2E4.`
+      );
+      const existing = await findProjectByNameFromSupabase(name);
+      await reloadServerProjects();
+      if (existing != null) {
+        setSelectedProjectId(existing.id);
+        setSheetView("project");
+      }
+      return;
+    }
+
+    let project = await findProjectByNameFromSupabase(name);
+    if (project == null) {
+      project = await insertProjectToSupabase(name);
+      if (project == null) {
+        window.alert(
+          "\uD504\uB85C\uC81D\uD2B8 \uCD94\uAC00\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. Supabase \uC5F0\uB3D9\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
+        );
+        return;
+      }
+    }
+
+    const added = await addProjectNameToMonthlyProjects(
+      monthKey,
+      project.project_name
+    );
+    if (!added) {
+      window.alert(
+        "\uC774\uBC88 \uB2EC \uD504\uB85C\uC81D\uD2B8 \uBAA9\uB85D \uCD94\uAC00\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. Supabase \uC5F0\uB3D9\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
       );
       return;
     }
+
     await reloadServerProjects();
-    setSelectedProjectId(inserted.id);
+    setSelectedProjectId(project.id);
     setSheetView("project");
   }, [timesheetYear, timesheetMonth, reloadServerProjects]);
+
+  const handleRemoveProjectFromMonth = useCallback(
+    async (projectId: string) => {
+      if (timesheetYear == null || timesheetMonth == null) return;
+      const target = projects.find((p) => p.id === projectId);
+      if (target == null) return;
+
+      const confirmed = window.confirm(
+        `"${target.name}" \uD504\uB85C\uC81D\uD2B8\uB97C \uC774\uBC88 \uB2EC \uC120\uD0DD \uBAA9\uB85D\uC5D0\uC11C\ub9cc \uC81C\uAC70\uD569\uB2C8\uB2E4.\n\n\uD504\uB85C\uC81D\uD2B8 \uC790\uCCB4\uC640 \uAE30\uC874 \uACF5\uC218 \uAE30\uB85D\uC740 \uC0AD\uC81C\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uACC4\uC18D\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?`
+      );
+      if (!confirmed) return;
+
+      const monthKey = formatMonthKey(timesheetYear, timesheetMonth);
+      const ok = await removeProjectNameFromMonthlyProjects(
+        monthKey,
+        target.name
+      );
+      if (!ok) {
+        window.alert(
+          "\uC774\uBC88 \uB2EC \uBAA9\uB85D\uC5D0\uC11C \uC81C\uAC70\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. Supabase \uC5F0\uB3D9\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
+        );
+        return;
+      }
+
+      if (selectedProjectId === projectId) {
+        setSelectedProjectId(null);
+      }
+      await reloadServerProjects();
+    },
+    [
+      timesheetYear,
+      timesheetMonth,
+      projects,
+      selectedProjectId,
+      reloadServerProjects,
+    ]
+  );
 
   const handleAddYear = useCallback(() => {
     const msg =
@@ -2591,14 +2709,24 @@ export default function AdminMainScreen({
 
   useEffect(() => {
     let cancelled = false;
-    const localExtras = readPersist().extraAdminAccounts ?? [];
-    void loadExtraAdminAccountsForSession(localExtras).then((rows) => {
+    const isMaster =
+      normalizeAdminAccountId(loggedInUserId) ===
+      normalizeAdminAccountId(MASTER_ADMIN_ID);
+    const localExtras = loadAdminPersist().extraAdminAccounts ?? [];
+    console.info("[admin-app] extraAdminAccounts from localStorage", {
+      storageKey: ADMIN_STORAGE_KEY,
+      count: localExtras.length,
+      isMaster,
+    });
+    void loadExtraAdminAccountsForSession(localExtras, {
+      allowMigrate: isMaster,
+    }).then((rows) => {
       if (!cancelled) setExtraAdminAccounts(rows);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loggedInUserId]);
 
   useEffect(() => {
     if (workerRateDialogTarget == null || workerRateDialogFetchBusy) return;
@@ -4153,6 +4281,18 @@ export default function AdminMainScreen({
               >
                 {"\uC218\uC815"}
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full px-3 py-1.5 text-left text-xs font-medium text-red-700 hover:bg-red-50 md:text-sm"
+                onClick={() => {
+                  const pid = projectContextMenu.projectId;
+                  setProjectContextMenu(null);
+                  void handleRemoveProjectFromMonth(pid);
+                }}
+              >
+                {"\uC774\uBC88 \uB2EC \uBAA9\uB85D\uC5D0\uC11C \uC81C\uAC70"}
+              </button>
             </div>,
             document.body
           )
@@ -4367,11 +4507,10 @@ export default function AdminMainScreen({
                   {"\uCC28\uC775"}
                   <input
                     type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
+                    inputMode="text"
                     value={workerRateDraft.spreadInput}
                     onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                      const v = sanitizeRateInputRaw(e.target.value);
+                      const v = sanitizeSpreadRateInputRaw(e.target.value);
                       setWorkerRateDraft((prev) => ({
                         ...prev,
                         spreadInput: v,

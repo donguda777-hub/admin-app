@@ -4,6 +4,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
  * Browser Supabase client (anon key only). Returns null if env is missing.
  * worker_day_entries는 조회(select) 및 프로젝트명 정정 시 project_name 일괄 update.
  * projects는 추가·이름 수정 가능.
+ * monthly_projects / monthly_project_months 는 월별 선택 목록 관리.
  */
 let browserClient: SupabaseClient | null = null;
 

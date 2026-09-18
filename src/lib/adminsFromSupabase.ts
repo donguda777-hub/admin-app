@@ -77,9 +77,54 @@ export async function fetchExtraAdminAccountsFromSupabase(): Promise<
     .eq("is_master", false)
     .order("created_at", { ascending: true });
 
-  if (error != null) return null;
+  if (error != null) {
+    console.error("[admin-app] admins fetch (extra accounts) failed:", error);
+    return null;
+  }
   const rows = (data ?? []) as AdminRemoteRow[];
   return rows.map(remoteRowToPersist);
+}
+
+/**
+ * localStorage(ln-admin-app-state-v1)의 extraAdminAccounts를 Supabase로 1회 업로드.
+ * 마스터 로그인 후 AdminMainScreen 마운트 시 호출.
+ */
+export async function migrateLocalExtraAdminsToSupabase(
+  localFallback: readonly AdminExtraAccountPersist[]
+): Promise<{ uploaded: number; failed: number; errors: string[] }> {
+  const extras = localFallback.filter((a) => !isMasterAdminAccountId(a.id));
+  const result = { uploaded: 0, failed: 0, errors: [] as string[] };
+
+  if (extras.length === 0) {
+    console.info(
+      "[admin-app] migrateLocalExtraAdminsToSupabase: no local extra accounts to upload"
+    );
+    return result;
+  }
+
+  console.info(
+    "[admin-app] migrateLocalExtraAdminsToSupabase: uploading",
+    extras.length,
+    "account(s)"
+  );
+
+  for (const a of extras) {
+    const err = await upsertExtraAdminAccountToSupabase(a);
+    if (err != null) {
+      result.failed += 1;
+      result.errors.push(`${normalizeAdminAccountId(a.id)}: ${err}`);
+      console.error(
+        "[admin-app] migrateLocalExtraAdminsToSupabase upsert failed:",
+        a.id,
+        err
+      );
+    } else {
+      result.uploaded += 1;
+    }
+  }
+
+  console.info("[admin-app] migrateLocalExtraAdminsToSupabase done:", result);
+  return result;
 }
 
 export async function upsertExtraAdminAccountToSupabase(
@@ -120,26 +165,39 @@ export async function deleteExtraAdminAccountFromSupabase(
   return error != null ? error.message : null;
 }
 
+export type LoadExtraAdminAccountsOptions = {
+  /** false면 local→Supabase 업로드 생략 (기본 true) */
+  allowMigrate?: boolean;
+};
+
 /**
- * 서버 계정 목록 로드. 서버가 비어 있고 로컬에만 있으면 1회 업로드(마이그레이션).
+ * 서버 계정 목록 로드. extra 계정이 서버에 없고 로컬에만 있으면 1회 업로드(마이그레이션).
  */
 export async function loadExtraAdminAccountsForSession(
-  localFallback: readonly AdminExtraAccountPersist[]
+  localFallback: readonly AdminExtraAccountPersist[],
+  options?: LoadExtraAdminAccountsOptions
 ): Promise<AdminExtraAccountPersist[]> {
+  const allowMigrate = options?.allowMigrate !== false;
+  const localExtras = localFallback.filter((a) => !isMasterAdminAccountId(a.id));
+
   const remote = await fetchExtraAdminAccountsFromSupabase();
   if (remote == null) {
-    return localFallback.filter(
-      (a) => !isMasterAdminAccountId(a.id)
+    console.warn(
+      "[admin-app] loadExtraAdminAccountsForSession: using local list only (Supabase fetch failed)"
     );
+    return localExtras;
   }
 
-  if (remote.length === 0 && localFallback.length > 0) {
-    for (const a of localFallback) {
-      if (isMasterAdminAccountId(a.id)) continue;
-      await upsertExtraAdminAccountToSupabase(a);
-    }
+  if (allowMigrate && remote.length === 0 && localExtras.length > 0) {
+    await migrateLocalExtraAdminsToSupabase(localFallback);
     const again = await fetchExtraAdminAccountsFromSupabase();
     return again ?? [];
+  }
+
+  if (allowMigrate && remote.length === 0 && localExtras.length === 0) {
+    console.info(
+      "[admin-app] loadExtraAdminAccountsForSession: remote has no extra admins; local extraAdminAccounts is empty (check ln-admin-app-state-v1 in DevTools)"
+    );
   }
 
   return remote;

@@ -79,6 +79,72 @@ export async function fetchActiveProjectsFromSupabase(): Promise<
   }
 }
 
+/** 프로젝트명으로 1건 조회 (is_active 무관) */
+export async function findProjectByNameFromSupabase(
+  rawName: string
+): Promise<ProjectRemoteRow | null> {
+  const project_name = normalizeProjectName(rawName);
+  if (!project_name) return null;
+  const supabase = getSupabaseBrowserClient();
+  if (supabase == null) return null;
+  try {
+    const { data, error } = await supabase
+      .from("projects")
+      .select("id, project_name, is_active, source, created_by")
+      .eq("project_name", project_name)
+      .limit(1);
+    if (error) throw error;
+    const rows = Array.isArray(data) ? data : [];
+    if (rows.length === 0) return null;
+    return parseProjectRow(rows[0]);
+  } catch (e) {
+    console.error("[Supabase] projects find by name failed", e);
+    return null;
+  }
+}
+
+/**
+ * 이름 목록에 해당하는 projects 행을 조회해 요청 이름 순서를 유지한다.
+ * is_active 무관(월 목록에만 있고 비활성인 경우도 탭에 표시).
+ */
+export async function resolveProjectsByNamesFromSupabase(
+  names: string[]
+): Promise<ProjectRemoteRow[]> {
+  const ordered = names
+    .map((n) => normalizeProjectName(n))
+    .filter((n) => n !== "");
+  if (ordered.length === 0) return [];
+  const supabase = getSupabaseBrowserClient();
+  if (supabase == null) return [];
+  try {
+    const unique = [...new Set(ordered)];
+    const { data, error } = await supabase
+      .from("projects")
+      .select("id, project_name, is_active, source, created_by")
+      .in("project_name", unique);
+    if (error) throw error;
+    const rows = Array.isArray(data) ? data : [];
+    const byName = new Map<string, ProjectRemoteRow>();
+    for (const row of rows) {
+      const parsed = parseProjectRow(row);
+      if (parsed == null) continue;
+      byName.set(parsed.project_name, parsed);
+    }
+    const out: ProjectRemoteRow[] = [];
+    const seen = new Set<string>();
+    for (const name of ordered) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const hit = byName.get(name);
+      if (hit != null) out.push(hit);
+    }
+    return out;
+  } catch (e) {
+    console.error("[Supabase] projects resolve by names failed", e);
+    return [];
+  }
+}
+
 /** 관리자앱에서 프로젝트 추가 */
 export async function insertProjectToSupabase(
   rawName: string
