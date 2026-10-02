@@ -71,6 +71,12 @@ import {
   updateCompanySlotCountsForMonthlyProject,
 } from "../lib/monthlyProjectsFromSupabase";
 import { deleteWorkerDayEntriesForMonthProjectAndCompanyGroup } from "../lib/deleteWorkerDayEntriesFromSupabase";
+import {
+  fetchPendingProjectRequests,
+  formatProjectRequestTime,
+  markProjectRequestProcessed,
+  type PendingProjectRequest,
+} from "../lib/projectRequestsFromSupabase";
 import { fetchWorkerDayEntriesForMonth } from "../lib/fetchWorkerDayEntriesForMonth";
 import {
   loadMonthlyPayrollData,
@@ -615,6 +621,16 @@ export default function AdminMainScreen({
   const [timesheetMonth, setTimesheetMonth] = useState(
     () => readPersist().timesheetMonth
   );
+  const [pendingProjectRequestCount, setPendingProjectRequestCount] =
+    useState(0);
+  const [projectRequestModalOpen, setProjectRequestModalOpen] =
+    useState(false);
+  const [pendingProjectRequests, setPendingProjectRequests] = useState<
+    PendingProjectRequest[]
+  >([]);
+  const [projectRequestBusyId, setProjectRequestBusyId] = useState<
+    string | null
+  >(null);
   /** ???? ?????????? ?????. null??? ?????? */
   const [openYear, setOpenYear] = useState(() => readPersist().openYear);
 
@@ -888,6 +904,19 @@ export default function AdminMainScreen({
     }
     void reloadServerProjects();
   }, [mainView, timesheetYear, timesheetMonth, reloadServerProjects]);
+
+  useEffect(() => {
+    if (mainView !== "timesheet") return;
+    let cancelled = false;
+    void fetchPendingProjectRequests().then((rows) => {
+      if (cancelled || rows == null) return;
+      setPendingProjectRequests(rows);
+      setPendingProjectRequestCount(rows.length);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mainView]);
 
   useEffect(() => {
     if (selectedProjectId == null) return;
@@ -2117,6 +2146,109 @@ export default function AdminMainScreen({
     setSheetView("project");
   }, [timesheetYear, timesheetMonth, reloadServerProjects]);
 
+  const dropPendingProjectRequest = useCallback((id: string) => {
+    setPendingProjectRequests((prev) => prev.filter((row) => row.id !== id));
+    setPendingProjectRequestCount((n) => (n > 0 ? n - 1 : 0));
+  }, []);
+
+  const openProjectRequestModal = useCallback(() => {
+    setProjectRequestModalOpen(true);
+    void fetchPendingProjectRequests().then((rows) => {
+      if (rows == null) return;
+      setPendingProjectRequests(rows);
+      setPendingProjectRequestCount(rows.length);
+    });
+  }, []);
+
+  const approveProjectRequest = useCallback(
+    async (req: PendingProjectRequest) => {
+      if (projectRequestBusyId != null) return;
+      const name = normalizeProjectName(req.projectName);
+      const monthMatch = /^(\d{4})-(\d{2})$/.exec(req.requestMonth.trim());
+      const year = monthMatch == null ? NaN : Number(monthMatch[1]);
+      const month = monthMatch == null ? NaN : Number(monthMatch[2]);
+      if (!name || month < 1 || month > 12) {
+        window.alert(
+          "\uC694\uCCAD\uC744 \uCC98\uB9AC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694."
+        );
+        return;
+      }
+
+      setProjectRequestBusyId(req.id);
+      try {
+        const monthKey = formatMonthKey(year, month);
+        const monthNames = await ensureMonthlyProjectsForMonth(year, month);
+        const already = monthNames.some(
+          (n) => normalizeProjectName(n) === name
+        );
+        if (already) {
+          window.alert(
+            "\uC774\uBBF8 \uD574\uB2F9 \uC6D4\uC5D0 \uB4F1\uB85D\uB41C \uD504\uB85C\uC81D\uD2B8\uC785\uB2C8\uB2E4."
+          );
+        } else {
+          const project = await ensureProjectCatalogRow(name);
+          if (project == null) {
+            window.alert(
+              "\uD504\uB85C\uC81D\uD2B8 \uCD94\uAC00\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. Supabase \uC5F0\uB3D9\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
+            );
+            return;
+          }
+          const added = await addProjectNameToMonthlyProjects(
+            monthKey,
+            project.project_name
+          );
+          if (!added) {
+            window.alert(
+              "\uC774\uBC88 \uB2EC \uD504\uB85C\uC81D\uD2B8 \uBAA9\uB85D \uCD94\uAC00\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. Supabase \uC5F0\uB3D9\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
+            );
+            return;
+          }
+        }
+
+        const marked = await markProjectRequestProcessed(req.id, "approved");
+        if (!marked) {
+          window.alert(
+            "\uC694\uCCAD \uC0C1\uD0DC \uBCC0\uACBD\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694."
+          );
+          return;
+        }
+        dropPendingProjectRequest(req.id);
+        if (timesheetYear === year && timesheetMonth === month) {
+          await reloadServerProjects();
+        }
+      } finally {
+        setProjectRequestBusyId(null);
+      }
+    },
+    [
+      projectRequestBusyId,
+      timesheetYear,
+      timesheetMonth,
+      reloadServerProjects,
+      dropPendingProjectRequest,
+    ]
+  );
+
+  const rejectProjectRequest = useCallback(
+    async (req: PendingProjectRequest) => {
+      if (projectRequestBusyId != null) return;
+      setProjectRequestBusyId(req.id);
+      try {
+        const marked = await markProjectRequestProcessed(req.id, "rejected");
+        if (!marked) {
+          window.alert(
+            "\uC694\uCCAD \uC0C1\uD0DC \uBCC0\uACBD\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694."
+          );
+          return;
+        }
+        dropPendingProjectRequest(req.id);
+      } finally {
+        setProjectRequestBusyId(null);
+      }
+    },
+    [projectRequestBusyId, dropPendingProjectRequest]
+  );
+
   const handleRemoveProjectFromMonth = useCallback(
     async (projectId: string) => {
       if (timesheetYear == null || timesheetMonth == null) return;
@@ -3203,6 +3335,7 @@ export default function AdminMainScreen({
         <>
           {/* ???? ??? ???, ?????????? ???????overflow ???? */}
           <div className="shrink-0 w-full min-w-0 overflow-x-visible overflow-y-visible border-b border-slate-200 bg-white py-2.5 pl-1 pr-1 md:pl-2 md:pr-2">
+        <div className="flex w-full min-w-0 items-center gap-2">
         <div className="flex w-max max-w-none flex-nowrap items-center gap-2">
           <span className="shrink-0 rounded border border-slate-300 bg-slate-100 px-2 py-1.5 text-xs font-bold text-slate-800 md:text-sm">
             {"\uC5F0/\uC6D4"}
@@ -3278,6 +3411,21 @@ export default function AdminMainScreen({
           >
             {"\uCD94\uAC00"}
           </button>
+        </div>
+        {mainView === "timesheet" ? (
+          <button
+            type="button"
+            onClick={openProjectRequestModal}
+            className={`ml-auto shrink-0 whitespace-nowrap rounded border bg-white px-2.5 py-1.5 text-xs transition md:text-sm ${
+              pendingProjectRequestCount > 0
+                ? "border-red-300 font-bold text-red-600"
+                : "border-slate-300 font-medium text-slate-800 hover:bg-slate-50"
+            }`}
+          >
+            {"\uD504\uB85C\uC81D\uD2B8 \uCD94\uAC00 \uC694\uCCAD "}
+            {pendingProjectRequestCount}
+          </button>
+        ) : null}
         </div>
       </div>
 
@@ -5145,6 +5293,100 @@ export default function AdminMainScreen({
             document.body
           )
         : null}
+      {projectRequestModalOpen ? (
+        <div
+          className="fixed inset-0 z-[440] flex items-center justify-center bg-black/35 p-4"
+          role="presentation"
+        >
+          <button
+            type="button"
+            className="absolute inset-0"
+            aria-label="close"
+            onClick={() => {
+              if (projectRequestBusyId != null) return;
+              setProjectRequestModalOpen(false);
+            }}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="project-request-modal-title"
+            className="relative z-10 flex max-h-[min(80vh,36rem)] w-full max-w-lg flex-col rounded-xl border border-slate-200 bg-white shadow-xl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h2
+                id="project-request-modal-title"
+                className="text-sm font-semibold text-slate-900 md:text-base"
+              >
+                {"\uD504\uB85C\uC81D\uD2B8 \uCD94\uAC00 \uC694\uCCAD"}
+              </h2>
+              <button
+                type="button"
+                disabled={projectRequestBusyId != null}
+                onClick={() => setProjectRequestModalOpen(false)}
+                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
+              >
+                {"\uB2EB\uAE30"}
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+              {pendingProjectRequests.length === 0 ? (
+                <p className="py-6 text-center text-sm text-slate-500">
+                  {"\uB300\uAE30 \uC911\uC778 \uC694\uCCAD\uC774 \uC5C6\uC2B5\uB2C8\uB2E4."}
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {pendingProjectRequests.map((req) => {
+                    const busy = projectRequestBusyId === req.id;
+                    return (
+                      <li
+                        key={req.id}
+                        className="rounded-lg border border-slate-200 px-3 py-2.5"
+                      >
+                        <p className="text-sm font-semibold text-slate-900">
+                          {req.projectName}
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                          {"\uC694\uCCAD\uC790 "}
+                          {req.workerName || "-"}
+                          {" \u00B7 \uC18C\uC18D "}
+                          {req.company || "-"}
+                        </p>
+                        <p className="text-xs leading-relaxed text-slate-600">
+                          {"\uC694\uCCAD \uC6D4 "}
+                          {req.requestMonth}
+                          {" \u00B7 \uC694\uCCAD \uC2DC\uAC04 "}
+                          {formatProjectRequestTime(req.createdAt)}
+                        </p>
+                        <div className="mt-2 flex gap-2">
+                          <button
+                            type="button"
+                            disabled={projectRequestBusyId != null}
+                            onClick={() => void approveProjectRequest(req)}
+                            className="rounded border border-teal-600 bg-teal-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {busy
+                              ? "\uCC98\uB9AC \uC911\u2026"
+                              : "\uC2B9\uC778"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={projectRequestBusyId != null}
+                            onClick={() => void rejectProjectRequest(req)}
+                            className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {"\uAC70\uC808"}
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
