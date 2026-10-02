@@ -31,7 +31,6 @@ import {
   timesheetGridStorageKey,
   timesheetWorkerIdCellKey,
   timesheetWorkerNameCellKey,
-  resolveWorkerRatesForSlot,
   workerRateStorageKey,
   type AdminExtraAccountPersist,
   type AdminExtraAccountRole,
@@ -78,6 +77,11 @@ import {
   type PendingProjectRequest,
 } from "../lib/projectRequestsFromSupabase";
 import { fetchWorkerDayEntriesForMonth } from "../lib/fetchWorkerDayEntriesForMonth";
+import {
+  fetchTimesheetSubmissionsForMonth,
+  openTimesheetSubmissionImage,
+  type TimesheetSubmissionRecord,
+} from "../lib/timesheetSubmissionsFromSupabase";
 import {
   loadMonthlyPayrollData,
   type MonthlyPayrollRow,
@@ -438,31 +442,142 @@ export function aggregateMonthSummariesFromEntries(
   return out;
 }
 
+type WorkerMonthEffort = {
+  matchKey: string;
+  nameKey: string;
+  workerName: string;
+  effort: number;
+};
+
+/**
+ * 프로젝트별 전체 집계와 같은 행만 작업자별로 합산한다.
+ * deleted, 프로젝트명 없음, 공수 0 이하는 제외한다.
+ */
+function aggregateWorkerMonthEfforts(
+  rows: readonly WorkerDayEntryRemoteRow[]
+): WorkerMonthEffort[] {
+  const byKey = new Map<string, WorkerMonthEffort>();
+  for (const row of rows) {
+    if (row == null || typeof row !== "object") continue;
+    if (row.deleted_at != null && String(row.deleted_at).trim() !== "") {
+      continue;
+    }
+    const projectName = String(row.project_name ?? "").trim();
+    if (projectName === "") continue;
+    const hours = parseSummaryWorkHours(row.work_hours);
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+    const workerId = String(row.worker_id ?? "").trim();
+    const workerName = String(row.worker_name ?? "").trim();
+    const matchKey =
+      workerId !== ""
+        ? `id:${workerId}`
+        : `name:${summaryProjectKey(workerName)}`;
+    let bucket = byKey.get(matchKey);
+    if (bucket == null) {
+      bucket = {
+        matchKey,
+        nameKey: `name:${summaryProjectKey(workerName)}`,
+        workerName,
+        effort: 0,
+      };
+      byKey.set(matchKey, bucket);
+    }
+    bucket.effort += hours;
+    if (bucket.workerName === "" && workerName !== "") {
+      bucket.workerName = workerName;
+    }
+  }
+  return [...byKey.values()];
+}
+
+type WorkerSettlementRow = {
+  key: string;
+  workerName: string;
+  adminEffort: number;
+  submissions: TimesheetSubmissionRecord[];
+};
+
+function submissionCreatedAtMs(iso: string): number {
+  const n = Date.parse(iso);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function submissionMatchKeys(sub: TimesheetSubmissionRecord): {
+  idKey: string;
+  nameKey: string;
+} {
+  const name = sub.workerName.trim();
+  const digits = sub.workerPhone.replace(/\D/g, "");
+  const last4 = digits.length >= 4 ? digits.slice(-4) : digits;
+  return {
+    idKey: name !== "" && last4 !== "" ? `id:${name}${last4}` : "",
+    nameKey: name !== "" ? `name:${summaryProjectKey(name)}` : "",
+  };
+}
+
+function buildWorkerSettlementRows(
+  efforts: readonly WorkerMonthEffort[],
+  submissions: readonly TimesheetSubmissionRecord[]
+): WorkerSettlementRow[] {
+  const groups = new Map<string, WorkerSettlementRow>();
+  for (const effort of efforts) {
+    groups.set(effort.matchKey, {
+      key: effort.matchKey,
+      workerName: effort.workerName !== "" ? effort.workerName : "-",
+      adminEffort: effort.effort,
+      submissions: [],
+    });
+  }
+  const sortedSubs = [...submissions].sort(
+    (a, b) =>
+      submissionCreatedAtMs(b.createdAt) - submissionCreatedAtMs(a.createdAt)
+  );
+  for (const sub of sortedSubs) {
+    const keys = submissionMatchKeys(sub);
+    let target =
+      keys.idKey !== "" ? groups.get(keys.idKey) : undefined;
+    if (target == null && keys.nameKey !== "") {
+      const named = efforts.filter((effort) => effort.nameKey === keys.nameKey);
+      if (named.length === 1) target = groups.get(named[0].matchKey);
+    }
+    if (target == null) {
+      const key = keys.idKey || keys.nameKey || `sub:${sub.id}`;
+      target = groups.get(key);
+      if (target == null) {
+        target = {
+          key,
+          workerName: sub.workerName !== "" ? sub.workerName : "-",
+          adminEffort: 0,
+          submissions: [],
+        };
+        groups.set(key, target);
+      }
+    }
+    if (target.submissions.length > 0) continue;
+    target.submissions.push(sub);
+  }
+  return [...groups.values()].sort((a, b) =>
+    a.workerName.localeCompare(b.workerName, "ko")
+  );
+}
+
 function resolveWorkerRatesForProjectSlot(
   workerIndex: number,
   body: Record<string, string>,
-  workerRatesByKey: Record<string, WorkerRatePersist>,
-  grid: TimesheetGridPersisted,
   projectId: string | null,
   projectWorkerRatesByKey: Record<string, WorkerRatePersist>
 ): WorkerRatePersist {
+  const empty: WorkerRatePersist = { base: null, spread: null };
   const workerId = (body[timesheetWorkerIdCellKey(workerIndex)] ?? "").trim();
-  if (projectId != null && projectId.trim() !== "" && workerId !== "") {
-    const k = projectWorkerRateStorageKey(projectId, workerId);
-    const pr = projectWorkerRatesByKey[k];
-    if (pr != null && (pr.base != null || pr.spread != null)) {
-      return {
-        base: pr.base ?? null,
-        spread: pr.spread ?? null,
-      };
-    }
+  if (projectId == null || projectId.trim() === "" || workerId === "") {
+    return empty;
   }
-  return resolveWorkerRatesForSlot(
-    workerIndex,
-    body,
-    workerRatesByKey,
-    grid
-  );
+  const pr = projectWorkerRatesByKey[projectWorkerRateStorageKey(projectId, workerId)];
+  if (pr == null || (pr.base == null && pr.spread == null)) return empty;
+  return {
+    base: pr.base ?? null,
+    spread: pr.spread ?? null,
+  };
 }
 
 /** ????? ??????????? ??: 0?????????????? */
@@ -606,6 +721,25 @@ export default function AdminMainScreen({
     month: number;
     byProjectKey: Map<string, MonthProjectSummaryAgg>;
   } | null>(null);
+  const [workerMonthEfforts, setWorkerMonthEfforts] = useState<
+    WorkerMonthEffort[]
+  >([]);
+  const [monthSubmissions, setMonthSubmissions] = useState<
+    TimesheetSubmissionRecord[]
+  >([]);
+  const [settlementMonthKey, setSettlementMonthKey] = useState<string | null>(
+    null
+  );
+  const [settlementPreview, setSettlementPreview] = useState<{
+    workerName: string;
+    adminLabel: string;
+    submissions: TimesheetSubmissionRecord[];
+    selectedId: string;
+  } | null>(null);
+  const [settlementImageUrl, setSettlementImageUrl] = useState<string | null>(
+    null
+  );
+  const [settlementImageError, setSettlementImageError] = useState(false);
   const readPersist = (): AdminPersistV1 => {
     if (persistInitRef.current === null) {
       persistInitRef.current = loadAdminPersist();
@@ -625,6 +759,8 @@ export default function AdminMainScreen({
     useState(0);
   const [projectRequestModalOpen, setProjectRequestModalOpen] =
     useState(false);
+  /** null이면 직접 추가 입력이 닫혀 있음 */
+  const [projectAddDraft, setProjectAddDraft] = useState<string | null>(null);
   const [pendingProjectRequests, setPendingProjectRequests] = useState<
     PendingProjectRequest[]
   >([]);
@@ -1011,9 +1147,16 @@ export default function AdminMainScreen({
     }
     const year = timesheetYear;
     const month = timesheetMonth;
+    const monthKey = formatMonthKey(year, month);
+    setSettlementPreview(null);
     const gen = ++monthSummaryFetchGenRef.current;
-    void fetchWorkerDayEntriesForMonth(year, month).then((res) => {
+    void Promise.all([
+      fetchWorkerDayEntriesForMonth(year, month),
+      fetchTimesheetSubmissionsForMonth(monthKey),
+    ]).then(([res, submissions]) => {
       if (gen !== monthSummaryFetchGenRef.current) return;
+      setSettlementMonthKey(monthKey);
+      setMonthSubmissions(submissions ?? []);
       if (res.error != null) {
         console.error(
           "[Supabase] month summary worker_day_entries fetch failed",
@@ -1024,6 +1167,7 @@ export default function AdminMainScreen({
           month,
           byProjectKey: new Map(),
         });
+        setWorkerMonthEfforts([]);
         return;
       }
       setMonthSummarySnapshot({
@@ -1031,6 +1175,7 @@ export default function AdminMainScreen({
         month,
         byProjectKey: aggregateMonthSummariesFromEntries(res.rows),
       });
+      setWorkerMonthEfforts(aggregateWorkerMonthEfforts(res.rows));
     });
   }, [canShowMonthSummary, timesheetYear, timesheetMonth]);
 
@@ -1438,6 +1583,63 @@ export default function AdminMainScreen({
     return { headcount, effort, profitLn };
   }, [projectMonthSummaryRows]);
 
+  const workerSettlementRows = useMemo(() => {
+    if (
+      timesheetYear == null ||
+      timesheetMonth == null ||
+      settlementMonthKey !== formatMonthKey(timesheetYear, timesheetMonth)
+    ) {
+      return [] as WorkerSettlementRow[];
+    }
+    return buildWorkerSettlementRows(workerMonthEfforts, monthSubmissions);
+  }, [
+    timesheetYear,
+    timesheetMonth,
+    settlementMonthKey,
+    workerMonthEfforts,
+    monthSubmissions,
+  ]);
+
+  const settlementSelected = useMemo(() => {
+    if (settlementPreview == null) return null;
+    return (
+      settlementPreview.submissions.find(
+        (row) => row.id === settlementPreview.selectedId
+      ) ?? settlementPreview.submissions[0] ?? null
+    );
+  }, [settlementPreview]);
+
+  useEffect(() => {
+    if (settlementSelected == null) return;
+    if (settlementSelected.imagePath === "") {
+      setSettlementImageUrl(null);
+      setSettlementImageError(true);
+      return;
+    }
+    let cancelled = false;
+    let blobUrl: string | null = null;
+    setSettlementImageUrl(null);
+    setSettlementImageError(false);
+    void openTimesheetSubmissionImage(settlementSelected.imagePath).then(
+      (opened) => {
+        if (cancelled) {
+          if (opened?.revoke) URL.revokeObjectURL(opened.url);
+          return;
+        }
+        if (opened == null) {
+          setSettlementImageError(true);
+          return;
+        }
+        if (opened.revoke) blobUrl = opened.url;
+        setSettlementImageUrl(opened.url);
+      }
+    );
+    return () => {
+      cancelled = true;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [settlementSelected]);
+
   const workerEffortTotals = useMemo(() => {
     const body = activeTimesheetGrid.body;
     const totals = new Array<number>(WORKER_SLOT_COUNT).fill(0);
@@ -1463,8 +1665,6 @@ export default function AdminMainScreen({
       const { base } = resolveWorkerRatesForProjectSlot(
         wi,
         body,
-        workerRatesByKey,
-        activeTimesheetGrid,
         selectedProjectId,
         projectWorkerRatesByKey
       );
@@ -1479,7 +1679,6 @@ export default function AdminMainScreen({
   }, [
     activeTimesheetGrid,
     workerEffortTotals,
-    workerRatesByKey,
     selectedProjectId,
     projectWorkerRatesByKey,
   ]);
@@ -1491,8 +1690,6 @@ export default function AdminMainScreen({
       const { base, spread } = resolveWorkerRatesForProjectSlot(
         wi,
         body,
-        workerRatesByKey,
-        activeTimesheetGrid,
         selectedProjectId,
         projectWorkerRatesByKey
       );
@@ -1512,7 +1709,6 @@ export default function AdminMainScreen({
   }, [
     activeTimesheetGrid,
     workerEffortTotals,
-    workerRatesByKey,
     selectedProjectId,
     projectWorkerRatesByKey,
   ]);
@@ -1524,8 +1720,6 @@ export default function AdminMainScreen({
       const { spread } = resolveWorkerRatesForProjectSlot(
         wi,
         body,
-        workerRatesByKey,
-        activeTimesheetGrid,
         selectedProjectId,
         projectWorkerRatesByKey
       );
@@ -1540,7 +1734,6 @@ export default function AdminMainScreen({
   }, [
     activeTimesheetGrid,
     workerEffortTotals,
-    workerRatesByKey,
     selectedProjectId,
     projectWorkerRatesByKey,
   ]);
@@ -1898,8 +2091,6 @@ export default function AdminMainScreen({
         const fallback = resolveWorkerRatesForProjectSlot(
           workerIndex,
           activeTimesheetGrid.body,
-          workerRatesByKey,
-          activeTimesheetGrid,
           selectedProjectId,
           projectWorkerRatesByKey
         );
@@ -1912,7 +2103,6 @@ export default function AdminMainScreen({
     },
     [
       activeTimesheetGrid,
-      workerRatesByKey,
       activeProject,
       timesheetYear,
       timesheetMonth,
@@ -2090,19 +2280,27 @@ export default function AdminMainScreen({
     pullWorkerDayEntriesRemote,
   ]);
 
-  const handleAddProject = useCallback(async () => {
+  const handleAddProject = useCallback(() => {
     if (timesheetYear == null || timesheetMonth == null) {
       window.alert(
         "\uBA3C\uC800 \uC5F0\uB3C4\uC640 \uC6D4\uC744 \uC120\uD0DD\uD558\uC138\uC694."
       );
       return;
     }
-    const msg =
-      "\uD504\uB85C\uC81D\uD2B8\uBA85\uC744 \uC785\uB825\uD558\uC138\uC694.";
-    const raw = window.prompt(msg);
-    if (raw == null || raw.trim() === "") return;
-    const name = normalizeProjectName(raw);
+    setProjectAddDraft("");
+  }, [timesheetYear, timesheetMonth]);
+
+  const confirmDirectProjectAdd = useCallback(async () => {
+    if (projectAddDraft == null) return;
+    if (timesheetYear == null || timesheetMonth == null) {
+      window.alert(
+        "\uBA3C\uC800 \uC5F0\uB3C4\uC640 \uC6D4\uC744 \uC120\uD0DD\uD558\uC138\uC694."
+      );
+      return;
+    }
+    const name = normalizeProjectName(projectAddDraft);
     if (name === "") return;
+    setProjectAddDraft(null);
 
     const monthKey = formatMonthKey(timesheetYear, timesheetMonth);
     const monthNames = await ensureMonthlyProjectsForMonth(
@@ -2144,7 +2342,7 @@ export default function AdminMainScreen({
     await reloadServerProjects();
     setSelectedProjectId(project.id);
     setSheetView("project");
-  }, [timesheetYear, timesheetMonth, reloadServerProjects]);
+  }, [projectAddDraft, timesheetYear, timesheetMonth, reloadServerProjects]);
 
   const dropPendingProjectRequest = useCallback((id: string) => {
     setPendingProjectRequests((prev) => prev.filter((row) => row.id !== id));
@@ -2322,8 +2520,6 @@ export default function AdminMainScreen({
       const { base, spread } = resolveWorkerRatesForProjectSlot(
         wi,
         grid.body,
-        workerRatesByKey,
-        grid,
         selectedProjectId,
         projectWorkerRatesByKey
       );
@@ -2364,7 +2560,6 @@ export default function AdminMainScreen({
     timesheetMonth,
     selectedProjectId,
     projects,
-    workerRatesByKey,
     projectWorkerRatesByKey,
   ]);
 
@@ -4372,7 +4567,100 @@ export default function AdminMainScreen({
               </table>
             </div>
           ) : canShowMonthSummary ? (
-            <div className="mx-auto w-full min-w-[21rem] max-w-[min(50vw,42rem)] rounded-md border border-slate-300 bg-white shadow-md">
+            <div className="flex w-full flex-wrap items-start justify-center gap-4">
+            <div className="w-full min-w-[18rem] max-w-md rounded-md border border-slate-300 bg-white shadow-md">
+              <table className="w-full table-fixed border-collapse text-[11px] leading-snug text-slate-800 md:text-[12px]">
+                <colgroup>
+                  <col style={{ width: "34%" }} />
+                  <col style={{ width: "22%" }} />
+                  <col style={{ width: "22%" }} />
+                  <col style={{ width: "22%" }} />
+                </colgroup>
+                <thead>
+                  <tr className="bg-slate-100">
+                    <th className="border border-slate-300 px-2 py-2 text-left text-[11px] font-bold text-slate-800 md:text-xs">
+                      {"\uC774\uB984"}
+                    </th>
+                    <th className="border border-slate-300 px-2 py-2 text-center text-[11px] font-bold text-slate-800 md:text-xs">
+                      {"\uAD00\uB9AC\uC790 \uACF5\uC218"}
+                    </th>
+                    <th className="border border-slate-300 px-2 py-2 text-center text-[11px] font-bold text-slate-800 md:text-xs">
+                      {"\uC81C\uCD9C \uACF5\uC218"}
+                    </th>
+                    <th className="border border-slate-300 px-2 py-2 text-center text-[11px] font-bold text-slate-800 md:text-xs">
+                      {"\uACF5\uC218\uD45C"}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workerSettlementRows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={4}
+                        className="border border-slate-300 bg-white px-3 py-5 text-center text-xs text-slate-600"
+                      >
+                        {"\uD574\uB2F9 \uC6D4\uC758 \uC791\uC5C5\uC790 \uACF5\uC218\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4."}
+                      </td>
+                    </tr>
+                  ) : (
+                    workerSettlementRows.map((row) => {
+                      const latest = row.submissions[0] ?? null;
+                      const mismatch =
+                        latest != null &&
+                        Math.abs(row.adminEffort - latest.totalGongsu) > 1e-6;
+                      const effortClass = mismatch
+                        ? "text-red-600 font-semibold"
+                        : "text-slate-700";
+                      return (
+                        <tr key={row.key} className="bg-white">
+                          <td
+                            className="min-w-0 truncate border border-slate-300 px-2 py-1.5 text-left font-medium text-slate-900"
+                            title={row.workerName}
+                          >
+                            {row.workerName}
+                          </td>
+                          <td
+                            className={`border border-slate-300 px-2 py-1.5 text-center tabular-nums ${effortClass}`}
+                          >
+                            {formatSummaryEffortCell(row.adminEffort)}
+                          </td>
+                          <td
+                            className={`border border-slate-300 px-2 py-1.5 text-center tabular-nums ${effortClass}`}
+                          >
+                            {latest == null
+                              ? "\uBBF8\uC81C\uCD9C"
+                              : formatSummaryEffortCell(latest.totalGongsu)}
+                          </td>
+                          <td className="border border-slate-300 px-2 py-1.5 text-center">
+                            {latest == null ? (
+                              "-"
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSettlementPreview({
+                                    workerName: row.workerName,
+                                    adminLabel: formatSummaryEffortCell(
+                                      row.adminEffort
+                                    ),
+                                    submissions: [latest],
+                                    selectedId: latest.id,
+                                  })
+                                }
+                                className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-800 hover:bg-slate-50 md:text-[11px]"
+                              >
+                                {"\uBCF4\uAE30"}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="w-full min-w-[21rem] max-w-[min(50vw,42rem)] rounded-md border border-slate-300 bg-white shadow-md">
               <table
                 key={`summary-${timesheetYear}-${timesheetMonth}`}
                 className="w-full table-fixed border-collapse text-[11px] leading-snug text-slate-800 md:text-[12px]"
@@ -4497,6 +4785,7 @@ export default function AdminMainScreen({
                   </tfoot>
                 ) : null}
               </table>
+            </div>
             </div>
           ) : (
             <div
@@ -5293,6 +5582,121 @@ export default function AdminMainScreen({
             document.body
           )
         : null}
+      {settlementPreview != null && settlementSelected != null ? (
+        <div
+          className="fixed inset-0 z-[450] flex items-center justify-center bg-black/45 p-4"
+          role="presentation"
+        >
+          <button
+            type="button"
+            className="absolute inset-0"
+            aria-label="close"
+            onClick={() => setSettlementPreview(null)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="relative z-10 flex max-h-[min(92vh,56rem)] w-full max-w-3xl flex-col rounded-xl border border-slate-200 bg-white shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+              <div className="min-w-0 text-sm leading-relaxed text-slate-800">
+                <p className="text-base font-semibold text-slate-900">
+                  {settlementPreview.workerName}
+                </p>
+                <p>
+                  {"\uB300\uC0C1 \uC6D4 "}
+                  {timesheetYear}
+                  {"\uB144 "}
+                  {timesheetMonth}
+                  {"\uC6D4"}
+                </p>
+                <p>
+                  {"\uAD00\uB9AC\uC790 \uACF5\uC218 "}
+                  {settlementPreview.adminLabel}
+                  {" \u00B7 \uC81C\uCD9C \uACF5\uC218 "}
+                  {formatSummaryEffortCell(settlementSelected.totalGongsu)}
+                </p>
+                <p>
+                  {"\uC81C\uCD9C \uC77C\uC2DC "}
+                  {formatProjectRequestTime(settlementSelected.createdAt)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSettlementPreview(null)}
+                className="shrink-0 rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50"
+              >
+                {"\uB2EB\uAE30"}
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+              {settlementImageError ? (
+                <p className="py-8 text-center text-sm text-slate-600">
+                  {"\uACF5\uC218\uD45C \uC774\uBBF8\uC9C0\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."}
+                </p>
+              ) : settlementImageUrl == null ? (
+                <p className="py-8 text-center text-sm text-slate-500">
+                  {"\uBD88\uB7EC\uC624\uB294 \uC911\uC785\uB2C8\uB2E4\u2026"}
+                </p>
+              ) : (
+                <img
+                  src={settlementImageUrl}
+                  alt={`${settlementPreview.workerName} \uACF5\uC218\uD45C`}
+                  className="mx-auto h-auto max-w-full"
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {projectAddDraft != null ? (
+        <div
+          className="fixed inset-0 z-[430] flex items-center justify-center bg-black/35 p-4"
+          role="presentation"
+        >
+          <button
+            type="button"
+            className="absolute inset-0"
+            aria-label="close"
+            onClick={() => setProjectAddDraft(null)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="relative z-10 w-full max-w-sm rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
+          >
+            <p className="text-sm font-semibold text-slate-900">
+              {"\uD504\uB85C\uC81D\uD2B8\uBA85\uC744 \uC785\uB825\uD558\uC138\uC694."}
+            </p>
+            <input
+              type="text"
+              value={projectAddDraft}
+              onChange={(e) => setProjectAddDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void confirmDirectProjectAdd();
+              }}
+              className="mt-3 w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm text-slate-900 outline-none focus:border-teal-500"
+              autoFocus
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setProjectAddDraft(null)}
+                className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50"
+              >
+                {"\uCDE8\uC18C"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDirectProjectAdd()}
+                className="rounded border border-teal-600 bg-teal-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-teal-700"
+              >
+                {"\uCD94\uAC00"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {projectRequestModalOpen ? (
         <div
           className="fixed inset-0 z-[440] flex items-center justify-center bg-black/35 p-4"
