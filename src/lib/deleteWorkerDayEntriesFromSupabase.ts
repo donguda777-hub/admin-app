@@ -1,3 +1,4 @@
+import { TIMESHEET_COMPANY_GROUP_NAMES } from "./timesheetCompanyGroups";
 import { getSupabaseBrowserClient } from "./supabaseClient";
 import {
   monthDateRangeForRemoteWorkerEntries,
@@ -29,7 +30,7 @@ export type DeleteWorkerDayEntriesParams = {
   projectNameTrimmed: string;
   year: number;
   month1Based: number;
-  /** 공수표 업체 열 인덱스 0..3 (TIMESHEET_COMPANY_GROUP_NAMES 순서) */
+  /** 공수표 업체 열 인덱스 0..2 (TIMESHEET_COMPANY_GROUP_NAMES 순서) */
   companyGroupIndex: number;
   workersCompanyByWorkerId: ReadonlyMap<string, string | null> | null;
 };
@@ -50,7 +51,11 @@ export async function deleteWorkerDayEntriesForMonthProjectAndCompanyGroup(
   const projectKey = normalizeProjectKey(p.projectNameTrimmed);
   if (!projectKey) return { ok: false, message: "missing project" };
   const gi = Math.trunc(p.companyGroupIndex);
-  if (!Number.isFinite(gi) || gi < 0 || gi > 3) {
+  if (
+    !Number.isFinite(gi) ||
+    gi < 0 ||
+    gi >= TIMESHEET_COMPANY_GROUP_NAMES.length
+  ) {
     return { ok: false, message: "invalid company group" };
   }
   const suffixTarget = String(gi);

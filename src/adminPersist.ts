@@ -1,3 +1,5 @@
+import { TIMESHEET_COMPANY_GROUP_NAMES } from "./lib/timesheetCompanyGroups";
+
 export const ADMIN_STORAGE_KEY = "ln-admin-app-state-v1";
 
 export type SheetViewPersist = "project" | "summary";
@@ -146,8 +148,7 @@ export const DEFAULT_COMPANY_WORKER_SLOT_COUNTS: readonly [
   number,
   number,
   number,
-  number,
-] = [8, 8, 8, 6];
+] = [16, 8, 6];
 
 export function defaultTimesheetGridPersisted(): TimesheetGridPersisted {
   return {
@@ -160,7 +161,7 @@ export function defaultTimesheetGridPersisted(): TimesheetGridPersisted {
 }
 
 export function normalizeCompanyWorkerSlotCounts(raw: unknown): number[] {
-  if (!Array.isArray(raw) || raw.length !== 4) {
+  if (!Array.isArray(raw) || raw.length !== TIMESHEET_COMPANY_GROUP_NAMES.length) {
     return [...DEFAULT_COMPANY_WORKER_SLOT_COUNTS];
   }
   const nums: number[] = [];
@@ -320,11 +321,15 @@ export function loadTimesheetLayoutClipboard(): TimesheetLayoutClipboardV1 | nul
     const cn = x.companyNames;
     const cc = x.companyWorkerSlotCounts;
     const wn = x.workerNames;
-    if (!Array.isArray(cn) || cn.length !== 4) return null;
+    if (!Array.isArray(cn) || cn.length !== TIMESHEET_COMPANY_GROUP_NAMES.length) {
+      return null;
+    }
     for (const s of cn) {
       if (typeof s !== "string") return null;
     }
-    if (!Array.isArray(cc) || cc.length !== 4) return null;
+    if (!Array.isArray(cc) || cc.length !== TIMESHEET_COMPANY_GROUP_NAMES.length) {
+      return null;
+    }
     const counts: number[] = [];
     for (const c of cc) {
       if (typeof c !== "number" || !Number.isFinite(c)) return null;

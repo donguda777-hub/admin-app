@@ -64,9 +64,11 @@ import {
 import {
   addProjectNameToMonthlyProjects,
   ensureMonthlyProjectsForMonth,
+  fetchCompanySlotCountsForMonthlyProject,
   formatMonthKey,
   removeProjectNameFromMonthlyProjects,
   renameProjectNameInMonthlyProjects,
+  updateCompanySlotCountsForMonthlyProject,
 } from "../lib/monthlyProjectsFromSupabase";
 import { deleteWorkerDayEntriesForMonthProjectAndCompanyGroup } from "../lib/deleteWorkerDayEntriesFromSupabase";
 import { fetchWorkerDayEntriesForMonth } from "../lib/fetchWorkerDayEntriesForMonth";
@@ -134,10 +136,6 @@ const COMPANY_GROUP_TONES = {
     header: "bg-[#f3ebe0] text-slate-800",
     worker: "bg-[#f3ebe0]",
   },
-  lline: {
-    header: "bg-[#e2ebf7] text-slate-800",
-    worker: "bg-[#e2ebf7]",
-  },
   minyeong: {
     header: "bg-[#dff3e6] text-slate-800",
     worker: "bg-[#dff3e6]",
@@ -156,9 +154,8 @@ const COMPANY_ROW_DEFS: ReadonlyArray<{
   tone: CompanyToneKey;
 }> = [
   { name: TIMESHEET_COMPANY_GROUP_NAMES[0], tone: "ln" },
-  { name: TIMESHEET_COMPANY_GROUP_NAMES[1], tone: "lline" },
-  { name: TIMESHEET_COMPANY_GROUP_NAMES[2], tone: "minyeong" },
-  { name: TIMESHEET_COMPANY_GROUP_NAMES[3], tone: "individual" },
+  { name: TIMESHEET_COMPANY_GROUP_NAMES[1], tone: "minyeong" },
+  { name: TIMESHEET_COMPANY_GROUP_NAMES[2], tone: "individual" },
 ];
 
 const WORKER_SLOT_COUNT = WORKER_COLUMN_COUNT;
@@ -595,6 +592,8 @@ export default function AdminMainScreen({
   const persistInitRef = useRef<AdminPersistV1 | null>(null);
   /** Supabase worker_day_entries ??????????? ????(????????????? ??????stale ????? ????) */
   const workerDayRemoteSyncGenRef = useRef(0);
+  /** 화살표 저장 이후 도착한 칸 수 조회가 화면을 되돌리지 않게 한다. */
+  const companySlotCountsEditGenRef = useRef(0);
   const monthSummaryFetchGenRef = useRef(0);
   const [monthSummarySnapshot, setMonthSummarySnapshot] = useState<{
     year: number;
@@ -637,16 +636,11 @@ export default function AdminMainScreen({
       stripLegacyAirfareFromTimesheetGrids(readPersist().timesheetGrids),
       WORKER_SLOT_COUNT
     );
-    const legacyGlobal = normalizeCompanyWorkerSlotCounts(
-      readPersist().companyWorkerSlotCounts
-    );
     const out: Record<string, TimesheetGridPersisted> = {};
     for (const [k, g] of Object.entries(loaded)) {
       out[k] = {
         ...g,
-        companyWorkerSlotCounts: normalizeCompanyWorkerSlotCounts(
-          g.companyWorkerSlotCounts ?? legacyGlobal
-        ),
+        companyWorkerSlotCounts: [...DEFAULT_COMPANY_WORKER_SLOT_COUNTS],
       };
     }
     return out;
@@ -1035,6 +1029,22 @@ export default function AdminMainScreen({
       }
       const genAtStart = workerDayRemoteSyncGenRef.current;
       const gridKey = activeTimesheetGridKey;
+      const editGenAtSlotFetch = companySlotCountsEditGenRef.current;
+      let serverSlotCounts: number[] | null = null;
+      if (source === "deps") {
+        const fetched = await fetchCompanySlotCountsForMonthlyProject(
+          formatMonthKey(timesheetYear, timesheetMonth),
+          project.name
+        );
+        if (workerDayRemoteSyncGenRef.current !== genAtStart) return;
+        if (companySlotCountsEditGenRef.current === editGenAtSlotFetch) {
+          if (fetched.status === "ready") {
+            serverSlotCounts = fetched.counts;
+          } else if (fetched.status === "absent") {
+            serverSlotCounts = [...DEFAULT_COMPANY_WORKER_SLOT_COUNTS];
+          }
+        }
+      }
       const { start, end, lastDay } = monthDateRangeForRemoteWorkerEntries(
         timesheetYear,
         timesheetMonth
@@ -1087,8 +1097,20 @@ export default function AdminMainScreen({
               slotsFilledByEmptyColumn: 0,
             };
             const layout = ensureTimesheetGridEntry(prev, gridKey);
+            const appliedSlotCounts =
+              serverSlotCounts != null &&
+              companySlotCountsEditGenRef.current === editGenAtSlotFetch
+                ? serverSlotCounts
+                : null;
+            const layoutForFill =
+              appliedSlotCounts == null
+                ? layout
+                : {
+                    ...layout,
+                    companyWorkerSlotCounts: appliedSlotCounts,
+                  };
             const built = applyRemoteEffortToLayoutGrid(
-              layout,
+              layoutForFill,
               rows,
               projectNameTrimmed,
               lastDay,
@@ -1109,10 +1131,22 @@ export default function AdminMainScreen({
               mergeErr
             );
             const layout = ensureTimesheetGridEntry(prev, gridKey);
+            const appliedSlotCounts =
+              serverSlotCounts != null &&
+              companySlotCountsEditGenRef.current === editGenAtSlotFetch
+                ? serverSlotCounts
+                : null;
+            const layoutForFill =
+              appliedSlotCounts == null
+                ? layout
+                : {
+                    ...layout,
+                    companyWorkerSlotCounts: appliedSlotCounts,
+                  };
             return {
               ...prev,
               [gridKey]: applyRemoteEffortToLayoutGrid(
-                layout,
+                layoutForFill,
                 [],
                 projectNameTrimmed,
                 lastDay,
@@ -1142,8 +1176,27 @@ export default function AdminMainScreen({
           });
         }
       } catch (e) {
-        if (workerDayRemoteSyncGenRef.current === genAtStart) {
-          console.error("[Supabase] worker_day_entries select failed", e);
+        if (workerDayRemoteSyncGenRef.current !== genAtStart) return;
+        console.error("[Supabase] worker_day_entries select failed", e);
+        if (
+          serverSlotCounts != null &&
+          companySlotCountsEditGenRef.current === editGenAtSlotFetch
+        ) {
+          const appliedSlotCounts = serverSlotCounts;
+          setTimesheetGrids((prev) => {
+            if (workerDayRemoteSyncGenRef.current !== genAtStart) return prev;
+            if (companySlotCountsEditGenRef.current !== editGenAtSlotFetch) {
+              return prev;
+            }
+            const cur = ensureTimesheetGridEntry(prev, gridKey);
+            return {
+              ...prev,
+              [gridKey]: {
+                ...cur,
+                companyWorkerSlotCounts: appliedSlotCounts,
+              },
+            };
+          });
         }
       }
     },
@@ -2671,22 +2724,41 @@ export default function AdminMainScreen({
 
   const updateActiveCompanyWorkerSlotCounts = useCallback(
     (updater: (prev: number[]) => number[]) => {
-      if (activeTimesheetGridKey == null) return;
+      if (
+        activeTimesheetGridKey == null ||
+        timesheetYear == null ||
+        timesheetMonth == null ||
+        activeProject == null
+      ) {
+        return;
+      }
+      const gridKey = activeTimesheetGridKey;
+      const monthKey = formatMonthKey(timesheetYear, timesheetMonth);
+      const projectName = activeProject.name;
       setTimesheetGrids((prev) => {
-        const cur = ensureTimesheetGridEntry(prev, activeTimesheetGridKey);
+        const cur = ensureTimesheetGridEntry(prev, gridKey);
+        const prevCounts = slotCountsForGrid(cur);
         const nextCounts = normalizeCompanyWorkerSlotCounts(
-          updater(slotCountsForGrid(cur))
+          updater(prevCounts)
+        );
+        const changed = nextCounts.some((n, i) => n !== prevCounts[i]);
+        if (!changed) return prev;
+        companySlotCountsEditGenRef.current += 1;
+        void updateCompanySlotCountsForMonthlyProject(
+          monthKey,
+          projectName,
+          nextCounts
         );
         return {
           ...prev,
-          [activeTimesheetGridKey]: {
+          [gridKey]: {
             ...cur,
             companyWorkerSlotCounts: nextCounts,
           },
         };
       });
     },
-    [activeTimesheetGridKey]
+    [activeTimesheetGridKey, timesheetYear, timesheetMonth, activeProject]
   );
 
   /** ??? ??????? ????? ??? +1, ???? ???????? -1 */

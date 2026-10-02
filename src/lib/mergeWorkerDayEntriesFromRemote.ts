@@ -55,12 +55,12 @@ function normalizeProjectKey(s: string): string {
   return s.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-/** 집계 키: 일·작업자명·업체그룹(0–3 또는 na) */
+/** 집계 키: 일·작업자명·업체그룹(0–2 또는 na) */
 const AGG_KEY_SEP = "\u001f";
 
 /**
  * 공수표 업체 열 배치와 동일한 기준으로 `worker_day_entries` 행의 업체 그룹 접미사를 계산한다.
- * (`"0"`…`"3"` 또는 `"na"`)
+ * (`"0"`…`"2"` 또는 `"na"`)
  */
 export function timesheetCompanyGroupSuffixForRemoteRow(
   row: WorkerDayEntryRemoteRow,

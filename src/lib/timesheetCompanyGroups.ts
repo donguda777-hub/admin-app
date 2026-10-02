@@ -4,7 +4,6 @@
  */
 export const TIMESHEET_COMPANY_GROUP_NAMES = [
   "L&N",
-  "L-LINE",
   "\uBBFC\uC601",
   "\uAC1C\uC778",
 ] as const;
@@ -17,7 +16,7 @@ function normalizeCompanyInput(raw: string): string {
 }
 
 /**
- * workers / worker_day_entries 의 company_name → 공수표 그룹 인덱스(0..3).
+ * workers / worker_day_entries 의 company_name → 공수표 그룹 인덱스(0..2).
  * 알 수 없는 문자열·빈 값은 null (기존 슬롯 배치로 fallback).
  */
 export function mapStoredCompanyToTimesheetGroupIndex(
@@ -29,7 +28,10 @@ export function mapStoredCompanyToTimesheetGroupIndex(
   for (let i = 0; i < TIMESHEET_COMPANY_GROUP_NAMES.length; i++) {
     if (t === TIMESHEET_COMPANY_GROUP_NAMES[i]) return i;
   }
-  if (t === "\uAC1C\uC778\uC0AC\uC5C5\uC790") return 3;
+  const individualIndex = TIMESHEET_COMPANY_GROUP_NAMES.indexOf("\uAC1C\uC778");
+  if (t === "\uAC1C\uC778\uC0AC\uC5C5\uC790" && individualIndex >= 0) {
+    return individualIndex;
+  }
   return null;
 }
 

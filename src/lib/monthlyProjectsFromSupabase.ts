@@ -1,3 +1,4 @@
+import { normalizeCompanyWorkerSlotCounts } from "../adminPersist";
 import { getSupabaseBrowserClient } from "./supabaseClient";
 import {
   fetchActiveProjectsFromSupabase,
@@ -114,6 +115,7 @@ async function insertMonthlyProjectNames(
   if (names.length === 0) return true;
   const supabase = getSupabaseBrowserClient();
   if (supabase == null) return false;
+  // company_slot_counts는 복사하지 않는다. 새 달 행은 DB 기본값 [16,8,6].
   const rows = names.map((project_name) => ({
     month: monthKey,
     project_name,
@@ -236,6 +238,7 @@ export async function addProjectNameToMonthlyProjects(
       return true;
     }
 
+    // company_slot_counts를 넣지 않으면 재등록 행은 DB 기본값 [16,8,6].
     const { error } = await supabase.from("monthly_projects").insert({
       month: key,
       project_name,
@@ -321,5 +324,98 @@ export async function renameProjectNameInMonthlyProjects(
   } catch (e) {
     console.error("[Supabase] monthly_projects rename failed", e);
     return { ok: false, updated: 0 };
+  }
+}
+
+function acceptedCompanySlotCounts(raw: readonly number[]): number[] | null {
+  const normalized = normalizeCompanyWorkerSlotCounts([...raw]);
+  if (raw.length !== normalized.length) return null;
+  for (let i = 0; i < normalized.length; i++) {
+    const n = raw[i];
+    if (typeof n !== "number" || !Number.isFinite(n)) return null;
+    if (normalized[i] !== Math.trunc(n)) return null;
+  }
+  return normalized;
+}
+
+export type MonthlyCompanySlotCountsRead =
+  | { status: "ready"; counts: number[] }
+  | { status: "absent" }
+  | { status: "failed" };
+
+/**
+ * 해당 월+프로젝트의 company_slot_counts.
+ * 비정상 값은 기본 칸 수로 맞춘 ready. 행이 없으면 absent. 조회 실패는 failed.
+ */
+export async function fetchCompanySlotCountsForMonthlyProject(
+  monthKey: string,
+  rawName: string
+): Promise<MonthlyCompanySlotCountsRead> {
+  const key = monthKey.trim();
+  const project_name = normalizeProjectName(rawName);
+  if (!key || !project_name) return { status: "absent" };
+  const supabase = getSupabaseBrowserClient();
+  if (supabase == null) return { status: "failed" };
+  try {
+    const { data, error } = await supabase
+      .from("monthly_projects")
+      .select("company_slot_counts")
+      .eq("month", key)
+      .eq("project_name", project_name)
+      .maybeSingle();
+    if (error) throw error;
+    if (data == null || typeof data !== "object") return { status: "absent" };
+    const raw = (data as { company_slot_counts?: unknown }).company_slot_counts;
+    return {
+      status: "ready",
+      counts: normalizeCompanyWorkerSlotCounts(raw),
+    };
+  } catch (e) {
+    console.error(
+      "[Supabase] monthly_projects company_slot_counts fetch failed",
+      e
+    );
+    return { status: "failed" };
+  }
+}
+
+/**
+ * 현재 월+프로젝트 행의 칸 수만 갱신한다.
+ * 다른 행은 조건에 넣지 않는다. 행이 없으면 새로 만들지 않는다.
+ */
+export async function updateCompanySlotCountsForMonthlyProject(
+  monthKey: string,
+  rawName: string,
+  counts: readonly number[]
+): Promise<boolean> {
+  const key = monthKey.trim();
+  const project_name = normalizeProjectName(rawName);
+  const accepted = acceptedCompanySlotCounts(counts);
+  if (!key || !project_name || accepted == null) return false;
+  const supabase = getSupabaseBrowserClient();
+  if (supabase == null) return false;
+  try {
+    const { data, error } = await supabase
+      .from("monthly_projects")
+      .update({ company_slot_counts: accepted })
+      .eq("month", key)
+      .eq("project_name", project_name)
+      .select("id");
+    if (error) throw error;
+    const updated = Array.isArray(data) ? data.length : 0;
+    if (updated !== 1) {
+      console.error(
+        "[Supabase] monthly_projects company_slot_counts update matched unexpected rows",
+        { key, project_name, updated }
+      );
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error(
+      "[Supabase] monthly_projects company_slot_counts update failed",
+      e
+    );
+    return false;
   }
 }
