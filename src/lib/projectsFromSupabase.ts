@@ -202,6 +202,74 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 /**
+ * 월별 목록용 projects 행을 확보한다.
+ * 다른 월에 같은 이름이 있으면 그 행을 재사용한다.
+ * project_name UNIQUE 로 insert가 거절되면 기존 행을 다시 찾아 쓰고,
+ * 비활성 행은 is_active=true 로 되돌린다.
+ */
+export async function ensureProjectCatalogRow(
+  rawName: string
+): Promise<ProjectRemoteRow | null> {
+  const project_name = normalizeProjectName(rawName);
+  if (!project_name) return null;
+  const supabase = getSupabaseBrowserClient();
+  if (supabase == null) {
+    console.error("[Supabase] projects ensure skip: client not configured");
+    return null;
+  }
+
+  const visible = await findProjectByNameFromSupabase(project_name);
+  if (visible != null) return visible;
+
+  const now = new Date().toISOString();
+  try {
+    const { data, error } = await supabase
+      .from("projects")
+      .insert({
+        project_name,
+        is_active: true,
+        source: "admin",
+        created_by: null,
+        updated_at: now,
+      })
+      .select("id, project_name, is_active, source, created_by")
+      .single();
+    if (error) {
+      if (!isUniqueViolation(error)) throw error;
+    } else {
+      const parsed = parseProjectRow(data);
+      if (parsed != null) return parsed;
+    }
+  } catch (e) {
+    if (!isUniqueViolation(e)) {
+      console.error("[Supabase] projects ensure insert failed", e);
+    }
+  }
+
+  const again = await findProjectByNameFromSupabase(project_name);
+  if (again != null) return again;
+
+  try {
+    const { data, error } = await supabase
+      .from("projects")
+      .update({ is_active: true, updated_at: new Date().toISOString() })
+      .eq("project_name", project_name)
+      .select("id, project_name, is_active, source, created_by");
+    if (error) throw error;
+    const rows = Array.isArray(data) ? data : [];
+    for (const row of rows) {
+      const parsed = parseProjectRow(row);
+      if (parsed != null) return parsed;
+    }
+  } catch (e) {
+    console.error("[Supabase] projects ensure reactivate failed", e);
+    return null;
+  }
+
+  return findProjectByNameFromSupabase(project_name);
+}
+
+/**
  * 프로젝트명 수정 + 동일 project_name 공수 기록의 project_name 일괄 변경.
  * projects 갱신 후 worker_day_entries 실패 시 projects 이름을 롤백한다.
  */

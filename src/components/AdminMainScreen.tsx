@@ -55,8 +55,8 @@ import {
   type WorkerRemoteRow,
 } from "../lib/personnelWorkersFromSupabase";
 import {
+  ensureProjectCatalogRow,
   findProjectByNameFromSupabase,
-  insertProjectToSupabase,
   normalizeProjectName,
   renameProjectNameWithWorkerEntriesInSupabase,
   resolveProjectsByNamesFromSupabase,
@@ -69,6 +69,7 @@ import {
   renameProjectNameInMonthlyProjects,
 } from "../lib/monthlyProjectsFromSupabase";
 import { deleteWorkerDayEntriesForMonthProjectAndCompanyGroup } from "../lib/deleteWorkerDayEntriesFromSupabase";
+import { fetchWorkerDayEntriesForMonth } from "../lib/fetchWorkerDayEntriesForMonth";
 import {
   loadMonthlyPayrollData,
   type MonthlyPayrollRow,
@@ -299,12 +300,16 @@ function formatRateInputValue(v: number | null | undefined): string {
   return String(Math.trunc(v));
 }
 
-/** 기준 단가 파싱: 숫자만, 음수 불가. 빈 값이면 null */
+/** ?????? ???: ????????????, ?????? null */
 function parseRateInputValue(raw: string): number | null {
   const digits = raw.replace(/\D/g, "");
   if (digits === "") return null;
   const n = Number.parseInt(digits, 10);
   return Number.isFinite(n) ? n : null;
+}
+
+function sanitizeRateInputRaw(raw: string): string {
+  return raw.replace(/\D/g, "");
 }
 
 /** 차익 단가 파싱: 맨 앞 '-' 허용. "-50000" → -50000 */
@@ -319,10 +324,6 @@ function parseSpreadRateInputValue(raw: string): number | null {
   return negative ? -n : n;
 }
 
-function sanitizeRateInputRaw(raw: string): string {
-  return raw.replace(/\D/g, "");
-}
-
 /** 차익 입력: 맨 앞 '-' 1개만 유지, 나머지 비숫자 제거 */
 function sanitizeSpreadRateInputRaw(raw: string): string {
   const negative = raw.trimStart().startsWith("-");
@@ -333,36 +334,103 @@ function sanitizeSpreadRateInputRaw(raw: string): string {
   return digits;
 }
 
-function computeWorkerEffortTotalsForSummary(
-  body: Record<string, string>,
-  dayList: readonly { day: number }[],
-  slotCount: number
-): number[] {
-  const totals = new Array<number>(slotCount).fill(0);
-  for (let wi = 0; wi < slotCount; wi++) {
-    let sum = 0;
-    for (const { day } of dayList) {
-      sum += parseEffortCellValue(body[bodyCellKey(day, wi)] ?? "");
-    }
-    totals[wi] = sum;
-  }
-  return totals;
+function summaryProjectKey(name: string): string {
+  return normalizeTimesheetProjectName(name).toLowerCase();
 }
 
-function computeWorkerLnTotalsForSummary(
-  spreadPerSlot: readonly (number | null)[],
-  workerEffortTotals: number[],
-  slotCount: number
-): (number | null)[] {
-  const out: (number | null)[] = new Array(slotCount).fill(null);
-  for (let wi = 0; wi < slotCount; wi++) {
-    const spread = spreadPerSlot[wi] ?? null;
-    const effort = workerEffortTotals[wi] ?? 0;
-    if (spread == null || !Number.isFinite(spread)) {
-      out[wi] = null;
+function parseSummaryWorkHours(v: unknown): number {
+  const h =
+    typeof v === "number"
+      ? v
+      : typeof v === "string"
+        ? Number.parseFloat(v.trim().replace(/,/g, "."))
+        : Number.NaN;
+  return Number.isFinite(h) ? h : Number.NaN;
+}
+
+/** 공수표 단가와 같이 정수 단가만 인정. 없으면 null. */
+function parseSummaryDbRate(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "number" && Number.isFinite(v)) return Math.trunc(v);
+  if (typeof v === "string") {
+    const n = Number.parseInt(v.trim(), 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+export type MonthProjectSummaryAgg = {
+  effort: number;
+  profitLn: number | null;
+  headcount: number;
+};
+
+/**
+ * 월간 worker_day_entries를 프로젝트별로 집계한다.
+ * 총공수는 work_hours 합계.
+ * 이익은 공수표와 같이 작업자별로 round(profit_rate × 공수)를 더한 값.
+ */
+export function aggregateMonthSummariesFromEntries(
+  rows: readonly WorkerDayEntryRemoteRow[]
+): Map<string, MonthProjectSummaryAgg> {
+  const workersByProject = new Map<
+    string,
+    Map<string, { effort: number; spread: number | null }>
+  >();
+
+  for (const row of rows) {
+    if (row == null || typeof row !== "object") continue;
+    if (row.deleted_at != null && String(row.deleted_at).trim() !== "") {
       continue;
     }
-    out[wi] = Math.round(spread * effort);
+    const projectName = String(row.project_name ?? "").trim();
+    if (projectName === "") continue;
+    const hours = parseSummaryWorkHours(row.work_hours);
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+
+    const projectKey = summaryProjectKey(projectName);
+    let byWorker = workersByProject.get(projectKey);
+    if (byWorker == null) {
+      byWorker = new Map();
+      workersByProject.set(projectKey, byWorker);
+    }
+    const workerId = String(row.worker_id ?? "").trim();
+    const workerName = String(row.worker_name ?? "").trim();
+    const workerKey =
+      workerId !== ""
+        ? `id:${workerId}`
+        : `name:${summaryProjectKey(workerName)}`;
+    let bucket = byWorker.get(workerKey);
+    if (bucket == null) {
+      bucket = { effort: 0, spread: null };
+      byWorker.set(workerKey, bucket);
+    }
+    bucket.effort += hours;
+    if (bucket.spread == null) {
+      const spread = parseSummaryDbRate(row.profit_rate);
+      if (spread != null) bucket.spread = spread;
+    }
+  }
+
+  const out = new Map<string, MonthProjectSummaryAgg>();
+  for (const [projectKey, byWorker] of workersByProject) {
+    let effort = 0;
+    let profit = 0;
+    let profitParts = 0;
+    let headcount = 0;
+    for (const bucket of byWorker.values()) {
+      effort += bucket.effort;
+      if (bucket.effort > 0) headcount += 1;
+      if (bucket.spread != null && Number.isFinite(bucket.spread)) {
+        profit += Math.round(bucket.spread * bucket.effort);
+        profitParts += 1;
+      }
+    }
+    out.set(projectKey, {
+      effort,
+      profitLn: profitParts === 0 ? null : profit,
+      headcount,
+    });
   }
   return out;
 }
@@ -392,55 +460,6 @@ function resolveWorkerRatesForProjectSlot(
     workerRatesByKey,
     grid
   );
-}
-
-function countNamedWorkerSlots(
-  body: Record<string, string>,
-  slotCount: number
-): number {
-  let n = 0;
-  for (let wi = 0; wi < slotCount; wi++) {
-    if ((body[timesheetWorkerNameCellKey(wi)] ?? "").trim() !== "") n++;
-  }
-  return n;
-}
-
-function computeProjectTimesheetSummary(
-  grid: TimesheetGridPersisted,
-  dayList: readonly { day: number }[],
-  slotCount: number,
-  workerRatesByKey: Record<string, WorkerRatePersist>,
-  projectId: string | null,
-  projectWorkerRatesByKey: Record<string, WorkerRatePersist>
-): { headcount: number; effort: number; profitLn: number | null } {
-  const body = grid.body;
-  const headcount = countNamedWorkerSlots(body, slotCount);
-  const effortArr = computeWorkerEffortTotalsForSummary(
-    body,
-    dayList,
-    slotCount
-  );
-  const effort = effortArr.reduce((a, v) => a + v, 0);
-  const spreadPerSlot = Array.from({ length: slotCount }, (_, wi) =>
-    resolveWorkerRatesForProjectSlot(
-      wi,
-      body,
-      workerRatesByKey,
-      grid,
-      projectId,
-      projectWorkerRatesByKey
-    ).spread
-  );
-  const lnArr = computeWorkerLnTotalsForSummary(
-    spreadPerSlot,
-    effortArr,
-    slotCount
-  );
-  const parts = lnArr.filter(
-    (v): v is number => v != null && Number.isFinite(v)
-  );
-  const profitLn = parts.length === 0 ? null : sumFiniteNumbers(parts);
-  return { headcount, effort, profitLn };
 }
 
 /** ????? ??????????? ??: 0?????????????? */
@@ -576,6 +595,12 @@ export default function AdminMainScreen({
   const persistInitRef = useRef<AdminPersistV1 | null>(null);
   /** Supabase worker_day_entries ??????????? ????(????????????? ??????stale ????? ????) */
   const workerDayRemoteSyncGenRef = useRef(0);
+  const monthSummaryFetchGenRef = useRef(0);
+  const [monthSummarySnapshot, setMonthSummarySnapshot] = useState<{
+    year: number;
+    month: number;
+    byProjectKey: Map<string, MonthProjectSummaryAgg>;
+  } | null>(null);
   const readPersist = (): AdminPersistV1 => {
     if (persistInitRef.current === null) {
       persistInitRef.current = loadAdminPersist();
@@ -953,6 +978,39 @@ export default function AdminMainScreen({
     timesheetYear != null &&
     timesheetMonth != null;
 
+  useEffect(() => {
+    if (
+      !canShowMonthSummary ||
+      timesheetYear == null ||
+      timesheetMonth == null
+    ) {
+      return;
+    }
+    const year = timesheetYear;
+    const month = timesheetMonth;
+    const gen = ++monthSummaryFetchGenRef.current;
+    void fetchWorkerDayEntriesForMonth(year, month).then((res) => {
+      if (gen !== monthSummaryFetchGenRef.current) return;
+      if (res.error != null) {
+        console.error(
+          "[Supabase] month summary worker_day_entries fetch failed",
+          res.error
+        );
+        setMonthSummarySnapshot({
+          year,
+          month,
+          byProjectKey: new Map(),
+        });
+        return;
+      }
+      setMonthSummarySnapshot({
+        year,
+        month,
+        byProjectKey: aggregateMonthSummariesFromEntries(res.rows),
+      });
+    });
+  }, [canShowMonthSummary, timesheetYear, timesheetMonth]);
+
   const pullWorkerDayEntriesRemote = useCallback(
     async (source: "deps" | "interval") => {
       if (
@@ -1260,32 +1318,28 @@ export default function AdminMainScreen({
         profitLn: number | null;
       }>;
     }
+    const snapshot =
+      monthSummarySnapshot != null &&
+      monthSummarySnapshot.year === timesheetYear &&
+      monthSummarySnapshot.month === timesheetMonth
+        ? monthSummarySnapshot.byProjectKey
+        : null;
     return projects.map((p) => {
-      const gridKey = timesheetGridStorageKey(
-        timesheetYear,
-        timesheetMonth,
-        p.name
-      );
-      const grid = timesheetGrids[gridKey] ?? { ...EMPTY_TIMESHEET_GRID };
-      const s = computeProjectTimesheetSummary(
-        grid,
-        days,
-        WORKER_SLOT_COUNT,
-        workerRatesByKey,
-        p.id,
-        projectWorkerRatesByKey
-      );
-      return { projectId: p.id, name: p.name, ...s };
+      const hit = snapshot?.get(summaryProjectKey(p.name));
+      return {
+        projectId: p.id,
+        name: p.name,
+        headcount: hit?.headcount ?? 0,
+        effort: hit?.effort ?? 0,
+        profitLn: hit?.profitLn ?? null,
+      };
     });
   }, [
     timesheetYear,
     timesheetMonth,
     activeSheetKey,
     projects,
-    timesheetGrids,
-    days,
-    workerRatesByKey,
-    projectWorkerRatesByKey,
+    monthSummarySnapshot,
   ]);
 
   const monthSummaryGrandTotals = useMemo(() => {
@@ -1697,7 +1751,10 @@ export default function AdminMainScreen({
         }
       }
       setRenameDialog(null);
-      await renameProjectNameInMonthlyProjects(oldName, result.project.project_name);
+      await renameProjectNameInMonthlyProjects(
+        oldName,
+        result.project.project_name
+      );
       await reloadServerProjects();
     },
     [
@@ -1966,12 +2023,10 @@ export default function AdminMainScreen({
     if (name === "") return;
 
     const monthKey = formatMonthKey(timesheetYear, timesheetMonth);
-    // 월 목록이 아직 없으면 승계/시드 후 추가
     const monthNames = await ensureMonthlyProjectsForMonth(
       timesheetYear,
       timesheetMonth
     );
-
     if (monthNames.some((n) => normalizeProjectName(n) === name)) {
       window.alert(
         `\uC774\uBBF8 "${name}" \uD504\uB85C\uC81D\uD2B8\uAC00 \uC774\uBC88 \uB2EC \uBAA9\uB85D\uC5D0 \uC788\uC2B5\uB2C8\uB2E4.`
@@ -1985,15 +2040,12 @@ export default function AdminMainScreen({
       return;
     }
 
-    let project = await findProjectByNameFromSupabase(name);
+    const project = await ensureProjectCatalogRow(name);
     if (project == null) {
-      project = await insertProjectToSupabase(name);
-      if (project == null) {
-        window.alert(
-          "\uD504\uB85C\uC81D\uD2B8 \uCD94\uAC00\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. Supabase \uC5F0\uB3D9\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
-        );
-        return;
-      }
+      window.alert(
+        "\uD504\uB85C\uC81D\uD2B8 \uCD94\uAC00\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. Supabase \uC5F0\uB3D9\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694."
+      );
+      return;
     }
 
     const added = await addProjectNameToMonthlyProjects(
@@ -2019,7 +2071,7 @@ export default function AdminMainScreen({
       if (target == null) return;
 
       const confirmed = window.confirm(
-        `"${target.name}" \uD504\uB85C\uC81D\uD2B8\uB97C \uC774\uBC88 \uB2EC \uC120\uD0DD \uBAA9\uB85D\uC5D0\uC11C\ub9cc \uC81C\uAC70\uD569\uB2C8\uB2E4.\n\n\uD504\uB85C\uC81D\uD2B8 \uC790\uCCB4\uC640 \uAE30\uC874 \uACF5\uC218 \uAE30\uB85D\uC740 \uC0AD\uC81C\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uACC4\uC18D\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?`
+        `"${target.name}" \uD504\uB85C\uC81D\uD2B8\uB97C \uC774\uBC88 \uB2EC \uC120\uD0DD \uBAA9\uB85D\uC5D0\uC11C\uB9CC \uC81C\uAC70\uD569\uB2C8\uB2E4.\n\n\uD504\uB85C\uC81D\uD2B8 \uC790\uCCB4\uC640 \uAE30\uC874 \uACF5\uC218 \uAE30\uB85D\uC740 \uC0AD\uC81C\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uACC4\uC18D\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?`
       );
       if (!confirmed) return;
 
